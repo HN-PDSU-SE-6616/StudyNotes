@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Taot的个人笔记</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        .active-node { background-color: #e0f2fe; color: #0284c7; }
+        .sidebar { width: 280px; flex-shrink: 0; }
+    </style>
+</head>
+<body class="h-screen flex text-gray-800">
+    <div id="app" class="flex w-full h-full">
+        <!-- 侧边栏 -->
+        <aside class="sidebar bg-slate-50 border-r border-slate-200 p-4 overflow-y-auto">
+            <div class="flex items-center gap-3 mb-8">
+                <div class="user-img">
+                    <img class="w-12 h-12 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold text-xl" src="/static/user.jpg" alt="">
+                </div>
+                <div>
+                    <h1 class="font-bold">Taot的知识库</h1>
+                    <p class="text-xs text-gray-500">Note System v1.0</p>
+                </div>
+            </div>
+
+            <!-- 递归树 -->
+            <tree-node v-for="node in tree" :key="node.id" :node="node" @select="loadNote"></tree-node>
+        </aside>
+
+        <!-- 右侧内容 -->
+        <main class="flex-grow bg-white">
+            <iframe id="note-frame" class="w-full h-full border-none" :srcdoc="currentContent"></iframe>
+        </main>
+    </div>
+
+    <!-- 递归组件模版 -->
+    <script type="text/x-template" id="tree-node-template">
+        <div class="ml-4">
+            <div @click="toggle" class="cursor-pointer py-1 px-2 rounded hover:bg-slate-200 flex items-center">
+                <span v-if="hasChildren" class="mr-1 text-xs">{{ expanded ? '▼' : '▶' }}</span>
+                <span v-else class="mr-4"></span>
+                {{ node.title }}
+            </div>
+            <div v-if="expanded && hasChildren" class="border-l border-slate-200">
+                <tree-node v-for="child in node.children" :key="child.id" :node="child" @select="$emit('select', $event)"></tree-node>
+            </div>
+        </div>
+    </script>
+
+    <script>
+        const { createApp, ref, computed } = Vue;
+        const PREFIX = "/Taot"
+
+        const app = createApp({
+            data() {
+                return { tree: [], currentContent: '<h1>欢迎来到知识库</h1><p>请从左侧选择笔记</p>' };
+            },
+            async mounted() {
+                const res = await axios.get(`${PREFIX}/notes/tree`);
+                this.tree = res.data;
+            },
+            methods: {
+                async loadNote(node) {
+                    if (node.content_type === 'file') {
+                        const res = await axios.get(`${PREFIX}/notes/${node.id}/detail`);
+                        this.currentContent = res.data;
+                    }
+                }
+            }
+        });
+
+        // 注册递归组件
+        app.component('tree-node', {
+            template: '#tree-node-template',
+            props: ['node'],
+            data() { return { expanded: false } },
+            computed: {
+                hasChildren() { return this.node.children && this.node.children.length > 0 }
+            },
+            methods: {
+                toggle() {
+                    this.$emit('select', this.node);
+                    if (this.hasChildren) this.expanded = !this.expanded;
+                }
+            }
+        });
+
+        app.mount('#app');
+    </script>
+</body>
+</html>
