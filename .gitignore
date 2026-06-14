@@ -1,2 +1,9 @@
 .idea
 blog.db
+.qoder
+.env
+.git
+.gitignore
+venv
+/frontend/node_modules/
+/frontend/dist/

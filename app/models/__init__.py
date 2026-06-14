@@ -1,0 +1,61 @@
+"""数据模型统一导出"""
+from app.models.user import (
+    User,
+    UserRegister,
+    UserLogin,
+    UserRead,
+    UserUpdate,
+    TokenResponse,
+)
+from app.models.page import (
+    Workspace,
+    Page,
+    Block,
+    PageLink,
+    BlockType,
+    PageCategory,
+    PageCreate,
+    PageUpdate,
+    PageRead,
+    PageTreeNode,
+    BlockCreate,
+    BlockUpdate,
+    BlockRead,
+    PageDetail,
+    PageGraph,
+    PageGraphNode,
+    PageGraphEdge,
+)
+
+# 保留旧模型兼容
+from app.models.legacy import Note, NoteCreate, NoteRead, NoteUpdate
+
+__all__ = [
+    "User",
+    "UserRegister",
+    "UserLogin",
+    "UserRead",
+    "UserUpdate",
+    "TokenResponse",
+    "Workspace",
+    "Page",
+    "Block",
+    "PageLink",
+    "BlockType",
+    "PageCategory",
+    "PageCreate",
+    "PageUpdate",
+    "PageRead",
+    "PageTreeNode",
+    "BlockCreate",
+    "BlockUpdate",
+    "BlockRead",
+    "PageDetail",
+    "PageGraph",
+    "PageGraphNode",
+    "PageGraphEdge",
+    "Note",
+    "NoteCreate",
+    "NoteRead",
+    "NoteUpdate",
+]
