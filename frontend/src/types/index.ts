@@ -17,6 +17,20 @@ export interface TokenResponse {
   user: User
 }
 
+/** 页面基础信息（不含 blocks） */
+export interface PageRead {
+  id: number
+  workspace_id: number
+  title: string
+  icon: string | null
+  category: string
+  parent_id: number | null
+  sort_order: number
+  is_pinned: boolean
+  created_at: string
+  updated_at: string
+}
+
 /** 页面树节点 */
 export interface PageTreeNode {
   id: number

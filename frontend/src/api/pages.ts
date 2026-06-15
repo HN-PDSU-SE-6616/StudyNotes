@@ -14,6 +14,8 @@ export const pagesApi = {
 
   remove: (pageId: number) => api.delete(`/pages/${pageId}`),
 
+  duplicate: (pageId: number) => api.post(`/pages/${pageId}/duplicate`),
+
   search: (q: string) => api.get('/pages/search', { params: { q } }),
 }
 
@@ -25,4 +27,12 @@ export const blocksApi = {
     api.patch<Block>(`/blocks/${blockId}`, data),
 
   remove: (blockId: number) => api.delete(`/blocks/${blockId}`),
+
+  reorder: (pageId: number, blockIds: number[]) =>
+    api.put<Block[]>(`/blocks/${pageId}/reorder`, blockIds),
+
+  duplicate: (blockId: number) => api.post<Block>(`/blocks/${blockId}/duplicate`),
+
+  importToPage: (pageId: number, content: string, format: 'html' | 'md') =>
+    api.post<Block[]>(`/blocks/${pageId}/import`, { content, format }),
 }

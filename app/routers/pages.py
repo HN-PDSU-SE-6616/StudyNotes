@@ -152,3 +152,49 @@ async def delete_page(
     await session.delete(page)
     await session.commit()
     return {"message": "页面已删除"}
+
+
+@router.post("/{page_id}/duplicate", response_model=PageRead, summary="复制页面")
+async def duplicate_page(
+    page_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """拷贝页面副本，包含所有 Block 内容"""
+    workspace = await get_user_workspace(session, current_user.id)
+    page = await session.get(Page, page_id)
+    if not page or page.workspace_id != workspace.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="页面不存在")
+
+    # 获取原页面的 blocks
+    blocks = (
+        await session.execute(
+            select(Block).where(Block.page_id == page_id).order_by(Block.sort_order)
+        )
+    ).scalars().all()
+
+    # 创建副本页面
+    new_page = Page(
+        workspace_id=workspace.id,
+        title=f"{page.title} (副本)",
+        icon=page.icon,
+        category=page.category,
+        parent_id=page.parent_id,
+        sort_order=page.sort_order + 1,
+    )
+    session.add(new_page)
+    await session.commit()
+    await session.refresh(new_page)
+
+    # 复制 blocks
+    for block in blocks:
+        new_block = Block(
+            page_id=new_page.id,
+            type=block.type,
+            content=block.content,
+            sort_order=block.sort_order,
+        )
+        session.add(new_block)
+    await session.commit()
+
+    return PageRead.model_validate(new_page)

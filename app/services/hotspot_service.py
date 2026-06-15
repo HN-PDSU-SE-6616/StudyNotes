@@ -1,4 +1,6 @@
 """首页热点数据聚合"""
+import random
+import string
 import time
 from typing import Any, Optional
 
@@ -7,6 +9,18 @@ from pydantic import BaseModel
 
 _cache: dict[str, tuple[float, Any]] = {}
 CACHE_TTL = 600
+BASE_HEADERS = {
+    'accept': '*/*',
+    'accept-language': 'zh-CN,zh;q=0.9',
+    'priority': 'u=1, i',
+    'sec-ch-ua': '"Microsoft Edge";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-site',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0',
+}
 
 
 class HotItem(BaseModel):
@@ -44,10 +58,12 @@ async def fetch_github_trending() -> list[HotItem]:
     items: list[HotItem] = []
     try:
         async with httpx.AsyncClient(timeout=10) as client:
+            headers = BASE_HEADERS
+            headers.update({"Accept": "application/vnd.github+json"})
             resp = await client.get(
                 "https://api.github.com/search/repositories",
                 params={"q": "stars:>1000", "sort": "stars", "order": "desc", "per_page": 10},
-                headers={"Accept": "application/vnd.github+json"},
+                headers=headers,
             )
             if resp.status_code == 200:
                 for repo in resp.json().get("items", []):
@@ -76,9 +92,26 @@ async def fetch_bilibili_hot() -> list[HotItem]:
     items: list[HotItem] = []
     try:
         async with httpx.AsyncClient(timeout=10) as client:
+            headers = BASE_HEADERS
+            headers.update({
+                'origin': 'https://search.bilibili.com',
+                'referer': 'https://search.bilibili.com/video?keyword=%E7%BC%96%E7%A8%8B%E6%95%99%E7%A8%8B&from_source=webhistory_search&spm_id_from=333.1007&search_source=3'
+            })
             resp = await client.get(
-                "https://api.bilibili.com/x/web-interface/search/type",
-                params={"search_type": "video", "keyword": "编程教程", "page": 1, "pagesize": 10},
+                'https://api.bilibili.com/x/web-interface/wbi/search/type',
+                headers=headers,
+                params={
+                    'search_type': 'video',
+                    'page': '1',
+                    'page_size': '10',
+                    'from_source': 'webhistory_search',
+                    'platform': 'pc',
+                    'keyword': '编程教程',
+                    'qv_id': random.choices(string.ascii_letters + string.digits, k=32),
+                    'source_tag': '3',
+                    'w_rid': random.choices(string.ascii_lowercase + string.digits, k=32),
+                    'wts': int(time.time() * 1000),
+                },
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -109,11 +142,12 @@ async def fetch_community_posts() -> list[HotItem]:
     items: list[HotItem] = []
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            hn = await client.get("https://hacker-news.firebaseio.com/v0/topstories.json")
+            headers = BASE_HEADERS
+            hn = await client.get("https://hacker-news.firebaseio.com/v0/topstories.json", headers=headers)
             if hn.status_code == 200:
                 ids = hn.json()[:5]
                 for sid in ids:
-                    story = await client.get(f"https://hacker-news.firebaseio.com/v0/item/{sid}.json")
+                    story = await client.get(f"https://hacker-news.firebaseio.com/v0/item/{sid}.json", headers=headers)
                     if story.status_code == 200:
                         s = story.json()
                         items.append(

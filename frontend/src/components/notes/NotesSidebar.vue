@@ -68,9 +68,27 @@
         :key="node.id"
         :node="node"
         :active-id="activeId"
+        :all-pages="flatPages"
         @select="$emit('select', $event)"
+        @action="handleAction"
       />
     </div>
+
+    <!-- 删除确认弹窗 -->
+    <Teleport to="body">
+      <div v-if="deleteTarget" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" @click.self="deleteTarget = null">
+        <div class="bg-white rounded-2xl p-6 w-96 shadow-xl">
+          <h3 class="text-lg font-semibold text-slate-800 mb-2">删除页面</h3>
+          <p class="text-sm text-slate-500 mb-6">
+            确定要删除「{{ deleteTarget.title }}」吗？此操作将同时删除页面内的所有 Block 和链接关系，且不可恢复。
+          </p>
+          <div class="flex justify-end gap-3">
+            <button class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-xl transition-colors" @click="deleteTarget = null">取消</button>
+            <button class="px-4 py-2 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors" @click="confirmDelete">确认删除</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- 底部返回首页 -->
     <div class="p-3 border-t border-slate-100">
@@ -83,18 +101,77 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { usePageStore } from '@/stores/page'
+import type { PageTreeNode as PageTreeNodeType } from '@/types'
 import UserAvatar from '@/components/common/UserAvatar.vue'
 import PageTreeNode from './PageTreeNode.vue'
 
 defineProps<{ activeId?: number | null }>()
-defineEmits<{ select: [id: number]; create: [] }>()
+const emit = defineEmits<{ select: [id: number]; create: []; createSubPage: [parentId: number] }>()
 
 const auth = useAuthStore()
 const pageStore = usePageStore()
+const router = useRouter()
 const searchInput = ref('')
+
+// 扁平化所有页面（用于移动到/嵌入到子菜单）
+function flattenTree(nodes: PageTreeNodeType[]): PageTreeNodeType[] {
+  const result: PageTreeNodeType[] = []
+  function walk(list: PageTreeNodeType[]) {
+    for (const n of list) {
+      result.push(n)
+      if (n.children) walk(n.children)
+      if (n.linked_children) walk(n.linked_children)
+    }
+  }
+  walk(nodes)
+  return result
+}
+const flatPages = computed(() => flattenTree(pageStore.tree))
+
+// 删除确认
+const deleteTarget = ref<{ id: number; title: string } | null>(null)
+
+async function confirmDelete() {
+  if (!deleteTarget.value) return
+  await pageStore.deletePage(deleteTarget.value.id)
+  deleteTarget.value = null
+}
+
+async function handleAction(type: string, payload?: Record<string, unknown>) {
+  if (!payload) return
+  switch (type) {
+    case 'rename':
+      await pageStore.renamePage(payload.pageId as number, payload.title as string)
+      break
+    case 'move':
+      await pageStore.movePage(payload.pageId as number, payload.parentId as number | null)
+      break
+    case 'embed':
+      // 嵌入到：在该页面的 blocks 末尾添加一个 page_link block
+      await pageStore.addBlock(payload.targetId as number, 'page_link', {
+        page_id: payload.pageId as number,
+        title: '',
+      })
+      break
+    case 'duplicate':
+      await pageStore.duplicatePage(payload.pageId as number)
+      break
+    case 'delete':
+      deleteTarget.value = { id: payload.pageId as number, title: payload.title as string }
+      break
+    case 'import':
+      // 快速导入：触发文件选择
+      emit('select', payload.pageId as number)
+      break
+    case 'addSubPage':
+      emit('createSubPage', payload.pageId as number)
+      break
+  }
+}
 
 let searchTimer: ReturnType<typeof setTimeout>
 function onSearch() {
