@@ -6,6 +6,8 @@ export const pagesApi = {
 
   detail: (pageId: number) => api.get<PageDetail>(`/pages/${pageId}`),
 
+  getBySlug: (slug: string) => api.get<PageDetail>(`/pages/by-slug/${slug}`),
+
   create: (data: { title: string; icon?: string; category?: string; parent_id?: number }) =>
     api.post('/pages/', data),
 
@@ -35,4 +37,10 @@ export const blocksApi = {
 
   importToPage: (pageId: number, content: string, format: 'html' | 'md') =>
     api.post<Block[]>(`/blocks/${pageId}/import`, { content, format }),
+
+  // 新：导入目录/文件到页面树
+  importPages: (formData: FormData) =>
+    api.post('/pages/import', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
 }

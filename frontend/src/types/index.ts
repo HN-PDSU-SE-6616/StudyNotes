@@ -21,6 +21,7 @@ export interface TokenResponse {
 export interface PageRead {
   id: number
   workspace_id: number
+  slug: string
   title: string
   icon: string | null
   category: string
@@ -35,6 +36,7 @@ export interface PageRead {
 export interface PageTreeNode {
   id: number
   workspace_id: number
+  slug: string
   title: string
   icon: string | null
   category: string
@@ -62,6 +64,7 @@ export interface Block {
 export interface PageDetail {
   id: number
   workspace_id: number
+  slug: string
   title: string
   icon: string | null
   category: string

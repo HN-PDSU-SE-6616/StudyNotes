@@ -11,14 +11,21 @@
         >
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
         </button>
-        <span v-if="page" class="text-lg shrink-0">{{ page.icon || '📄' }}</span>
-        <input
-          v-if="page"
-          :value="page.title"
-          class="text-lg font-semibold text-slate-800 bg-transparent border-none outline-none min-w-0 flex-1"
-          placeholder="无标题"
-          @change="onTitleChange"
-        />
+
+        <!-- 面包屑导航 -->
+        <nav v-if="page" class="flex items-center gap-1 min-w-0 text-sm">
+          <template v-for="(crumb, i) in breadcrumbs" :key="crumb.id">
+            <span v-if="i > 0" class="text-slate-300 shrink-0">›</span>
+            <button
+              class="truncate max-w-[160px] hover:text-brand-600 transition-colors shrink-0"
+              :class="i === breadcrumbs.length - 1 ? 'font-semibold text-slate-800' : 'text-slate-500'"
+              :title="crumb.title"
+              @click="onNavigateBreadcrumb(crumb)"
+            >
+              {{ crumb.title }}
+            </button>
+          </template>
+        </nav>
         <span v-else class="text-lg font-semibold text-slate-400">无标题</span>
       </div>
 
@@ -166,6 +173,16 @@ const pageStore = usePageStore()
 const router = useRouter()
 const page = computed(() => pageStore.currentPage)
 
+// 面包屑
+const breadcrumbs = computed(() => {
+  if (!page.value) return []
+  return pageStore.getBreadcrumb(page.value.id)
+})
+
+function onNavigateBreadcrumb(crumb: { id: number; slug: string }) {
+  emit('navigate', crumb.id)
+}
+
 // 扁平化页面列表
 function flattenTree(nodes: PageTreeNode[]): PageTreeNode[] {
   const result: PageTreeNode[] = []
@@ -223,14 +240,16 @@ const addBlockStyle = ref<Record<string, string>>({})
 
 const baseBlocks = [
   { type: 'paragraph', label: '段落', icon: '¶', shortcut: '输入文本', default: { text: '' } },
-  { type: 'heading', label: '一级标题', icon: 'H1', shortcut: '# 空格', default: { level: 1, text: '' } },
-  { type: 'heading', label: '二级标题', icon: 'H2', shortcut: '## 空格', default: { level: 2, text: '' } },
-  { type: 'heading', label: '三级标题', icon: 'H3', shortcut: '### 空格', default: { level: 3, text: '' } },
+  { type: 'heading', label: '一级标题', icon: 'H1', shortcut: '# 空格 / Ctrl+1', default: { level: 1, text: '' } },
+  { type: 'heading', label: '二级标题', icon: 'H2', shortcut: '## 空格 / Ctrl+2', default: { level: 2, text: '' } },
+  { type: 'heading', label: '三级标题', icon: 'H3', shortcut: '### 空格 / Ctrl+3', default: { level: 3, text: '' } },
   { type: 'list', label: '无序列表', icon: '•', shortcut: '- 空格', default: { ordered: false, items: [] } },
   { type: 'list', label: '有序列表', icon: '1.', shortcut: '1. 空格', default: { ordered: true, items: [] } },
+  { type: 'list', label: '任务列表', icon: '☑', shortcut: '- [ ] 空格', default: { ordered: false, task: true, items: [] } },
   { type: 'quote', label: '引用', icon: '❝', shortcut: '> 空格', default: { text: '' } },
   { type: 'divider', label: '分割线', icon: '—', shortcut: '---', default: {} },
-  { type: 'code', label: '代码块', icon: '</>', shortcut: '``` 语言', default: { language: 'python', code: '' } },
+  { type: 'table', label: '表格', icon: '▦', shortcut: '| 列1 | 列2 |', default: { headers: ['列1', '列2'], rows: [] } },
+  { type: 'code', label: '代码块', icon: '</>', shortcut: '``` 语言 / Ctrl+Shift+K', default: { language: 'python', code: '' } },
   { type: 'callout', label: '提示框', icon: '💡', shortcut: '', default: { type: 'info', text: '提示内容' } },
 ]
 const mediaBlocks = [
@@ -259,6 +278,22 @@ async function addBlock(type: string, content: Record<string, unknown>) {
 
 async function onBlockSave(blockId: number, content: Record<string, unknown>) {
   await pageStore.updateBlock(blockId, { content })
+  // 如果是 H1 块，同步更新页面标题
+  syncTitleFromH1(blockId)
+}
+
+function syncTitleFromH1(blockId: number) {
+  if (!page.value) return
+  const block = page.value.blocks.find(b => b.id === blockId)
+  if (!block || block.type !== 'heading') return
+  const level = (block.content as Record<string, unknown>).level
+  if (level !== 1) return
+  const h1Text = String((block.content as Record<string, unknown>).text || '').trim()
+  if (h1Text && h1Text !== page.value.title) {
+    pagesApi.update(page.value.id, { title: h1Text })
+    page.value.title = h1Text
+    pageStore.fetchTree()
+  }
 }
 async function onChangeBlockType(blockId: number, newType: string) {
   await pageStore.updateBlock(blockId, { type: newType })

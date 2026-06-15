@@ -1,9 +1,15 @@
 """页面与 Block 模型"""
+import secrets
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
 from sqlmodel import Field, SQLModel, Column, JSON
+
+
+def _gen_slug() -> str:
+    """生成16位随机唯一标识符 (a-zA-Z0-9)"""
+    return secrets.token_urlsafe(12)[:16]
 
 
 class BlockType(str, Enum):
@@ -43,6 +49,7 @@ class Page(SQLModel, table=True):
     """笔记页面"""
     id: Optional[int] = Field(default=None, primary_key=True)
     workspace_id: int = Field(foreign_key="workspace.id", index=True)
+    slug: str = Field(default_factory=_gen_slug, unique=True, index=True, max_length=16)
     title: str = Field(index=True)
     icon: Optional[str] = Field(default="📄")
     category: str = Field(default=PageCategory.CUSTOM.value)
@@ -93,6 +100,7 @@ class PageUpdate(SQLModel):
 class PageRead(SQLModel):
     id: int
     workspace_id: int
+    slug: str
     title: str
     icon: Optional[str]
     category: str
@@ -104,6 +112,7 @@ class PageRead(SQLModel):
 
 
 class PageTreeNode(PageRead):
+    slug: str
     children: list["PageTreeNode"] = []
     linked_children: list["PageTreeNode"] = []
 

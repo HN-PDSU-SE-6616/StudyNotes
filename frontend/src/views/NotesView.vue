@@ -2,7 +2,7 @@
   <div class="h-screen flex overflow-hidden">
     <NotesSidebar
       v-if="sidebarVisible"
-      :active-id="activePageId"
+      :active-id="pageStore.currentPage?.id ?? null"
       @select="onSelectPage"
       @create="onCreatePage"
       @create-sub-page="onCreateSubPage"
@@ -26,37 +26,53 @@ const router = useRouter()
 const pageStore = usePageStore()
 const sidebarVisible = ref(true)
 
-const activePageId = computed(() => {
-  const id = route.params.pageId
-  return id ? Number(id) : null
+const activeSlug = computed(() => {
+  const s = route.params.slug
+  return typeof s === 'string' && s ? s : null
 })
 
 onMounted(async () => {
   await pageStore.fetchTree()
-  if (activePageId.value) {
-    await pageStore.fetchPage(activePageId.value)
+  if (activeSlug.value) {
+    await pageStore.fetchPageBySlug(activeSlug.value)
   }
 })
 
-watch(activePageId, async (id) => {
-  if (id) await pageStore.fetchPage(id)
+watch(activeSlug, async (slug) => {
+  if (slug) await pageStore.fetchPageBySlug(slug)
   else pageStore.currentPage = null
 })
 
 async function onSelectPage(id: number) {
-  router.push(`/notes/${id}`)
+  // 从 tree 中查找对应 slug
+  const page = findPageById(pageStore.tree, id)
+  if (page?.slug) {
+    router.push(`/notes/${page.slug}`)
+  }
+}
+
+function findPageById(nodes: import('@/types').PageTreeNode[], id: number): import('@/types').PageTreeNode | null {
+  for (const n of nodes) {
+    if (n.id === id) return n
+    if (n.children) {
+      const found = findPageById(n.children, id)
+      if (found) return found
+    }
+    if (n.linked_children) {
+      const found = findPageById(n.linked_children, id)
+      if (found) return found
+    }
+  }
+  return null
 }
 
 async function onCreatePage() {
   const page = await pageStore.createPage()
-  // 新页面添加2个默认占位 block
-  await pageStore.addBlock(page.id, 'heading', { level: 1, text: '' })
-  await pageStore.addBlock(page.id, 'paragraph', { text: '' })
-  router.push(`/notes/${page.id}`)
+  router.push(`/notes/${page.slug}`)
 }
 
 async function onCreateSubPage(parentId: number) {
   const page = await pageStore.createSubPage(parentId)
-  router.push(`/notes/${page.id}`)
+  router.push(`/notes/${page.slug}`)
 }
 </script>

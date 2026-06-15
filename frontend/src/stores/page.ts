@@ -26,6 +26,41 @@ export const usePageStore = defineStore('page', () => {
     }
   }
 
+  async function fetchPageBySlug(slug: string) {
+    loading.value = true
+    try {
+      const { data } = await pagesApi.getBySlug(slug)
+      currentPage.value = data
+      return data
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /** 构建面包屑路径 */
+  function getBreadcrumb(pageId: number): { id: number; slug: string; title: string }[] {
+    const path: { id: number; slug: string; title: string }[] = []
+    const pageMap = new Map<number, PageTreeNode>()
+    function walk(nodes: PageTreeNode[]) {
+      for (const n of nodes) {
+        pageMap.set(n.id, n)
+        if (n.children) walk(n.children)
+        if (n.linked_children) walk(n.linked_children)
+      }
+    }
+    walk(tree.value)
+    let current: PageTreeNode | undefined = pageMap.get(pageId)
+    while (current) {
+      path.unshift({ id: current.id, slug: current.slug, title: current.title })
+      if (current.parent_id) {
+        current = pageMap.get(current.parent_id)
+      } else {
+        break
+      }
+    }
+    return path
+  }
+
   async function createPage(title = '无标题页面') {
     const { data } = await pagesApi.create({ title, icon: '📄' })
     await fetchTree()
@@ -34,8 +69,6 @@ export const usePageStore = defineStore('page', () => {
 
   async function createSubPage(parentId: number, title = '无标题子页面') {
     const { data } = await pagesApi.create({ title, icon: '📄', parent_id: parentId })
-    // 在父页面末尾添加 page_link block
-    await addBlock(parentId, 'page_link', { page_id: data.id, title })
     await fetchTree()
     return data
   }
@@ -124,6 +157,12 @@ export const usePageStore = defineStore('page', () => {
     return data
   }
 
+  async function importPages(formData: FormData) {
+    const { data } = await blocksApi.importPages(formData)
+    await fetchTree()
+    return data
+  }
+
   async function searchPages(q: string) {
     searchQuery.value = q
     if (!q.trim()) {
@@ -142,6 +181,8 @@ export const usePageStore = defineStore('page', () => {
     searchResults,
     fetchTree,
     fetchPage,
+    fetchPageBySlug,
+    getBreadcrumb,
     createPage,
     createSubPage,
     updatePage,
@@ -155,6 +196,7 @@ export const usePageStore = defineStore('page', () => {
     duplicateBlock,
     reorderBlocks,
     importToPage,
+    importPages,
     searchPages,
   }
 })

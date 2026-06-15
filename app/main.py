@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.database import init_db
-from app.routers import notes, convert, auth, pages, blocks, hotspots
+from app.routers import notes, convert, auth, pages, blocks, hotspots, files
 
 
 @asynccontextmanager
@@ -42,3 +42,4 @@ app.include_router(blocks.router, prefix=PREFIX)
 app.include_router(hotspots.router, prefix=PREFIX)
 app.include_router(notes.router, prefix=PREFIX)
 app.include_router(convert.router, prefix=PREFIX)
+app.include_router(files.router, prefix=PREFIX)

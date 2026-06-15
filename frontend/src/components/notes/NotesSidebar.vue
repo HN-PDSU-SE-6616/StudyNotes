@@ -97,6 +97,58 @@
         返回首页
       </router-link>
     </div>
+
+    <!-- 隐藏的文件导入输入 -->
+    <!-- 目录选择 -->
+    <input
+      ref="dirInput"
+      type="file"
+      webkitdirectory
+      class="hidden"
+      @change="onImportDir"
+    />
+    <!-- 文件多选 -->
+    <input
+      ref="fileInput"
+      type="file"
+      accept=".md,.html,.htm"
+      multiple
+      class="hidden"
+      @change="onImportFiles"
+    />
+
+    <!-- 导入选择弹窗 -->
+    <Teleport to="body">
+      <div v-if="importDialogOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" @click.self="importDialogOpen = false">
+        <div class="bg-white rounded-2xl p-6 w-96 shadow-xl">
+          <h3 class="text-lg font-semibold text-slate-800 mb-2">导入目录/文件</h3>
+          <p class="text-sm text-slate-500 mb-5">选择导入方式。目录导入会递归处理子目录结构。</p>
+          <div class="space-y-3">
+            <button
+              class="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-brand-50 hover:border-brand-300 transition-colors text-left"
+              @click="selectDirectory"
+            >
+              <span class="text-xl">📁</span>
+              <div>
+                <div class="text-sm font-medium text-slate-700">导入目录</div>
+                <div class="text-xs text-slate-400">选择整个文件夹，递归导入子目录</div>
+              </div>
+            </button>
+            <button
+              class="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-brand-50 hover:border-brand-300 transition-colors text-left"
+              @click="selectFiles"
+            >
+              <span class="text-xl">📄</span>
+              <div>
+                <div class="text-sm font-medium text-slate-700">导入文件</div>
+                <div class="text-xs text-slate-400">选择一个或多个 .md / .html 文件</div>
+              </div>
+            </button>
+          </div>
+          <button class="mt-4 w-full py-2 text-sm text-slate-500 hover:text-slate-700 transition-colors" @click="importDialogOpen = false">取消</button>
+        </div>
+      </div>
+    </Teleport>
   </aside>
 </template>
 
@@ -116,6 +168,57 @@ const auth = useAuthStore()
 const pageStore = usePageStore()
 const router = useRouter()
 const searchInput = ref('')
+
+// 文件导入
+const dirInput = ref<HTMLInputElement>()
+const fileInput = ref<HTMLInputElement>()
+const importDialogOpen = ref(false)
+const importParentId = ref<number>(0)
+
+function triggerImport(pageId: number) {
+  importParentId.value = pageId
+  importDialogOpen.value = true
+}
+
+function selectDirectory() {
+  importDialogOpen.value = false
+  dirInput.value?.click()
+}
+
+function selectFiles() {
+  importDialogOpen.value = false
+  fileInput.value?.click()
+}
+
+async function onImportDir(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = input.files
+  if (!files || files.length === 0) return
+  await uploadImportFiles(files)
+  input.value = ''
+}
+
+async function onImportFiles(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = input.files
+  if (!files || files.length === 0) return
+  await uploadImportFiles(files)
+  input.value = ''
+}
+
+async function uploadImportFiles(fileList: FileList) {
+  const formData = new FormData()
+  if (importParentId.value) {
+    formData.append('parent_id', String(importParentId.value))
+  }
+  for (let i = 0; i < fileList.length; i++) {
+    const f = fileList[i]
+    // webkitRelativePath 保留目录结构，否则用文件名
+    const path = (f as any).webkitRelativePath || f.name
+    formData.append('files', f, path)
+  }
+  await pageStore.importPages(formData)
+}
 
 // 扁平化所有页面（用于移动到/嵌入到子菜单）
 function flattenTree(nodes: PageTreeNodeType[]): PageTreeNodeType[] {
@@ -164,8 +267,8 @@ async function handleAction(type: string, payload?: Record<string, unknown>) {
       deleteTarget.value = { id: payload.pageId as number, title: payload.title as string }
       break
     case 'import':
-      // 快速导入：触发文件选择
-      emit('select', payload.pageId as number)
+      // 直接打开文件管理器导入
+      triggerImport(payload.pageId as number)
       break
     case 'addSubPage':
       emit('createSubPage', payload.pageId as number)
