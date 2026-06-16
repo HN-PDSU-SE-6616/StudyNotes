@@ -22,6 +22,7 @@ from app.models.page import (
     PageGraph,
     PageLink,
     PageRead,
+    PageStats,
     PageTreeNode,
     PageUpdate,
 )
@@ -71,7 +72,12 @@ async def create_page(
     session: AsyncSession = Depends(get_session),
 ):
     workspace = await get_user_workspace(session, current_user.id)
-    page = Page(workspace_id=workspace.id, **body.model_dump())
+    page = Page(
+        workspace_id=workspace.id,
+        creator_id=current_user.id,
+        last_editor_id=current_user.id,
+        **body.model_dump(),
+    )
     session.add(page)
     await session.commit()
     await session.refresh(page)
@@ -166,10 +172,79 @@ async def update_page(
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(page, key, value)
     page.updated_at = datetime.utcnow()
+    page.last_editor_id = current_user.id
     session.add(page)
     await session.commit()
     await session.refresh(page)
     return PageRead.model_validate(page)
+
+
+@router.get("/{page_id}/stats", response_model=PageStats, summary="获取页面统计信息")
+async def get_page_stats(
+    page_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """获取页面的字数、块数、浏览量、创建/编辑者等统计信息"""
+    workspace = await get_user_workspace(session, current_user.id)
+    page = await session.get(Page, page_id)
+    if not page or page.workspace_id != workspace.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="页面不存在")
+
+    # 获取所有 blocks 并计算字数
+    blocks = (
+        await session.execute(
+            select(Block).where(Block.page_id == page_id).order_by(Block.sort_order)
+        )
+    ).scalars().all()
+
+    total_words = 0
+    for b in blocks:
+        c = b.content or {}
+        if isinstance(c, dict):
+            for tf in ('text', 'code'):
+                text_val = c.get(tf, '')
+                if isinstance(text_val, str):
+                    total_words += len(text_val.replace(' ', ''))
+            # list items
+            items = c.get('items', [])
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        item_text = item.get('text', '')
+                        if isinstance(item_text, str):
+                            total_words += len(item_text.replace(' ', ''))
+                    elif isinstance(item, str):
+                        total_words += len(item.replace(' ', ''))
+
+    # 获取创建者和最后编辑者的用户名
+    from app.models.user import User as UserModel
+    creator_name = None
+    last_editor_name = None
+    if page.creator_id:
+        creator = await session.get(UserModel, page.creator_id)
+        if creator:
+            creator_name = creator.display_name or creator.username
+    if page.last_editor_id:
+        editor = await session.get(UserModel, page.last_editor_id)
+        if editor:
+            last_editor_name = editor.display_name or editor.username
+
+    # 增加浏览量（每次获取统计信息时 +1）
+    page.view_count = (page.view_count or 0) + 1
+    session.add(page)
+    await session.commit()
+    await session.refresh(page)
+
+    return PageStats(
+        total_words=total_words,
+        block_count=len(blocks),
+        view_count=page.view_count,
+        created_at=page.created_at,
+        creator_name=creator_name,
+        updated_at=page.updated_at,
+        last_editor_name=last_editor_name,
+    )
 
 
 @router.delete("/{page_id}", summary="删除页面")
@@ -231,6 +306,8 @@ async def duplicate_page(
         category=page.category,
         parent_id=page.parent_id,
         sort_order=page.sort_order + 1,
+        creator_id=current_user.id,
+        last_editor_id=current_user.id,
     )
     session.add(new_page)
     await session.commit()
@@ -339,7 +416,8 @@ def _resolve_page_from_path(
     basename = os.path.basename(clean)
     no_ext_base = re.sub(r'\.(md|html|htm)$', '', basename)
     for k, v in path_to_page.items():
-        k_basename = os.path.basename(k)
+        k_lower = k.lower()
+        k_basename = os.path.basename(k_lower)
         k_no_ext = re.sub(r'\.(md|html|htm)$', '', k_basename)
         if k_no_ext == no_ext_base:
             return v
@@ -349,9 +427,10 @@ def _resolve_page_from_path(
     if len(parts) >= 2:
         last_two = '/'.join(parts[-2:])
         for k, v in path_to_page.items():
-            if k.endswith(last_two):
+            k_lower = k.lower()
+            if k_lower.endswith(last_two):
                 return v
-            k_no_ext = re.sub(r'\.(md|html|htm)$', '', k)
+            k_no_ext = re.sub(r'\.(md|html|htm)$', '', k_lower)
             if k_no_ext.endswith('/'.join(parts[-2:])):
                 return v
 
@@ -380,9 +459,90 @@ async def _clear_placeholder_blocks(session: AsyncSession, page_id: int) -> int:
 
 # ---- MD 解析 ----
 
+# TOC 条目正则：可选缩进 + - [text](#anchor)
+_TOC_ITEM_RE = re.compile(r'^\s*[-*+]\s+\[[^\]]+\]\(#[^)]+\)\s*$')
+
+
+def _strip_md_toc(md_text: str) -> str:
+    """
+    检测并移除 Markdown 文件中的目录（TOC）部分。
+    目录特征：
+    1. 以"目录"/"Table of Contents"等标题开头，后跟锚点链接列表项
+    2. 或文档中首次出现连续锚点链接列表项（至少2个）
+
+    返回移除目录后的 Markdown 文本。
+    """
+    lines = md_text.split('\n')
+    n = len(lines)
+
+    # 查找目录标题位置或首个 TOC 条目位置
+    toc_start = -1
+    for i in range(n):
+        stripped = lines[i].strip()
+        # 目录标题行：## 目录 / # Table of Contents 等
+        if re.match(
+            r'^#{1,3}\s*(目录|Table\s*of\s*Contents|Contents|目錄|目次)\s*$',
+            stripped, re.IGNORECASE,
+        ):
+            toc_start = i
+            break
+        # 未遇到目录标题前，如果遇到非空且非 TOC 条目的行，说明没有目录
+        if stripped and not re.match(r'^#{1,6}\s', stripped):
+            if not _TOC_ITEM_RE.match(stripped):
+                # 不是标题也不是 TOC 条目，不是目录，停止搜索
+                break
+
+    if toc_start < 0:
+        return md_text  # 未找到目录
+
+    # 从目录起始位置读取：跳过目录标题行（如果有），收集所有 TOC 条目
+    i = toc_start
+    if re.match(
+        r'^#{1,3}\s*(目录|Table\s*of\s*Contents|Contents|目錄|目次)\s*$',
+        lines[i].strip(), re.IGNORECASE,
+    ):
+        i += 1  # 跳过"目录"标题行
+
+    toc_item_count = 0
+    while i < n:
+        stripped = lines[i].strip()
+        if not stripped:
+            i += 1  # 跳过空行（目录内分隔）
+            continue
+        if _TOC_ITEM_RE.match(stripped):
+            toc_item_count += 1
+            i += 1
+            continue
+        # 遇到非 TOC 条目，停止
+        break
+
+    # 至少需要 2 个 TOC 条目才算有效目录
+    if toc_item_count < 2:
+        return md_text
+
+    # 拼接结果：保留目录之前的内容，移除目录区域，拼接剩余内容
+    # 移除 toc_start 到 i 之间的所有行
+    # 跳过目录后的连续空行
+    while i < n and not lines[i].strip():
+        i += 1
+
+    result = lines[:toc_start]
+    # 清理结果尾部的空行
+    while result and not result[-1].strip():
+        result.pop()
+    # 如果结果非空，添加一个空行作为分隔
+    if result:
+        result.append('')
+    result.extend(lines[i:])
+
+    return '\n'.join(result)
+
 
 def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Block]:
     """简易 Markdown 解析为 Block 列表"""
+    # 预处理：移除目录
+    md_text = _strip_md_toc(md_text)
+
     blocks: list[Block] = []
     order = start_order
     lines = md_text.strip().split('\n')
@@ -738,6 +898,8 @@ async def _import_md_tree(
             title=dir_name,
             icon='📁',
             parent_id=parent_page.id,
+            creator_id=user_id,
+            last_editor_id=user_id,
         )
         session.add(child_page)
         await session.commit()
@@ -858,6 +1020,8 @@ async def _import_html_tree(
             title=dir_name,
             icon='📁',
             parent_id=parent_page.id,
+            creator_id=user_id,
+            last_editor_id=user_id,
         )
         session.add(child_page)
         await session.commit()
@@ -933,7 +1097,16 @@ async def _fix_page_links(
     link_re_loose = re.compile(r'\[([^\]]+)\]\(([^)]+?)(?:\s+"[^"]*")?\)')
 
     for block in blocks:
-        content = block.content or {}
+        # 浅拷贝 content dict，确保后续赋值是一个新对象，
+        # 否则 SQLAlchemy 的 dirty-check 无法检测到 JSON 列的变更。
+        raw_content = block.content
+        if isinstance(raw_content, dict):
+            content = dict(raw_content)
+        elif raw_content:
+            # 非 dict 类型（如 list/str），先跳过，后续会被 continue 过滤
+            content = raw_content
+        else:
+            content = {}
         if not isinstance(content, dict):
             continue
         changed = False
@@ -1033,6 +1206,8 @@ async def import_pages(
             workspace_id=workspace.id,
             title='导入的页面',
             icon='📥',
+            creator_id=current_user.id,
+            last_editor_id=current_user.id,
         )
         session.add(target_page)
         await session.commit()

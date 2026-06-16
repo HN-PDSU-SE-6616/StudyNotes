@@ -28,6 +28,9 @@ export interface PageRead {
   parent_id: number | null
   sort_order: number
   is_pinned: boolean
+  creator_id: number | null
+  last_editor_id: number | null
+  view_count: number
   created_at: string
   updated_at: string
 }
@@ -71,9 +74,23 @@ export interface PageDetail {
   parent_id: number | null
   sort_order: number
   is_pinned: boolean
+  creator_id: number | null
+  last_editor_id: number | null
+  view_count: number
   created_at: string
   updated_at: string
   blocks: Block[]
+}
+
+/** 页面统计信息 */
+export interface PageStats {
+  total_words: number
+  block_count: number
+  view_count: number
+  created_at: string
+  creator_name: string | null
+  updated_at: string
+  last_editor_name: string | null
 }
 
 /** 热点条目 */

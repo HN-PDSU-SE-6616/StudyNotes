@@ -1,5 +1,5 @@
 import api from './index'
-import type { Block, PageDetail, PageTreeNode } from '@/types'
+import type { Block, PageDetail, PageStats, PageTreeNode } from '@/types'
 
 export const pagesApi = {
   tree: () => api.get<PageTreeNode[]>('/pages/tree'),
@@ -7,6 +7,8 @@ export const pagesApi = {
   detail: (pageId: number) => api.get<PageDetail>(`/pages/${pageId}`),
 
   getBySlug: (slug: string) => api.get<PageDetail>(`/pages/by-slug/${slug}`),
+
+  stats: (pageId: number) => api.get<PageStats>(`/pages/${pageId}/stats`),
 
   create: (data: { title: string; icon?: string; category?: string; parent_id?: number }) =>
     api.post('/pages/', data),

@@ -2,6 +2,7 @@
   <div
     class="block-item group relative flex gap-2"
     :class="{ 'bg-slate-50/50 -mx-4 px-4 rounded-lg': showHandle }"
+    :data-block-id="block.id"
     @mouseenter="showHandle = true"
     @mouseleave="showHandle = false"
     @contextmenu.prevent="onContextMenu"
@@ -106,7 +107,10 @@
         :class="headingClass"
         @click="startEdit"
       >
-        <span v-if="!editing" :class="{ [placeholderClass]: !text }" v-html="formattedText || '标题 ' + level" />
+        <span v-if="!editing" :class="{ [placeholderClass]: !text }">
+          <span v-if="props.settings?.autoNumbering && props.headingNumber" class="text-slate-400 mr-2 font-mono text-[0.85em]">{{ props.headingNumber }}</span>
+          <span v-html="formattedText || '标题 ' + level" />
+        </span>
         <input
           v-else
           ref="inputRef"
@@ -294,6 +298,13 @@ import type { Block, PageTreeNode } from '@/types'
 const props = defineProps<{
   block: Block
   allPages?: PageTreeNode[]
+  settings?: {
+    adaptiveWidth?: boolean
+    smallFont?: boolean
+    showToc?: boolean
+    autoNumbering?: boolean
+  }
+  headingNumber?: string
 }>()
 
 const emit = defineEmits<{

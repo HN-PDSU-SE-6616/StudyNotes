@@ -333,7 +333,7 @@ frontend/
 
 ### 7.1 环境要求
 
-- Python 3.10+
+- Python 3.9+
 - Node.js 18+（前端开发）
 - 已创建 Python 虚拟环境 `venv/`
 

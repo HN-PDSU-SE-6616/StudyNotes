@@ -56,6 +56,9 @@ class Page(SQLModel, table=True):
     parent_id: Optional[int] = Field(default=None, foreign_key="page.id")
     sort_order: int = Field(default=0)
     is_pinned: bool = Field(default=False)
+    creator_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    last_editor_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    view_count: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -107,6 +110,9 @@ class PageRead(SQLModel):
     parent_id: Optional[int]
     sort_order: int
     is_pinned: bool
+    creator_id: Optional[int] = None
+    last_editor_id: Optional[int] = None
+    view_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -157,3 +163,14 @@ class PageGraphEdge(SQLModel):
 class PageGraph(SQLModel):
     nodes: list[PageGraphNode]
     edges: list[PageGraphEdge]
+
+
+class PageStats(SQLModel):
+    """页面统计信息"""
+    total_words: int = 0          # 总字数
+    block_count: int = 0            # 块个数
+    view_count: int = 0             # 页面总浏览量
+    created_at: datetime            # 创建时间
+    creator_name: Optional[str] = None  # 创建者
+    updated_at: datetime            # 最后编辑时间
+    last_editor_name: Optional[str] = None  # 最后编辑者

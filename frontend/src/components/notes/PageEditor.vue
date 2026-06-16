@@ -66,106 +66,150 @@
         >
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
         </button>
-        <!-- "..." 页面更多选项 -->
-        <div v-if="page" class="relative" ref="pageMenuRef">
-          <button
-            class="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
-            @click.stop="showPageMenu = !showPageMenu"
-          >
-            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM16 12a2 2 0 100-4 2 2 0 000 4z" /></svg>
-          </button>
-          <Teleport to="body">
-            <div v-if="showPageMenu" class="fixed inset-0 z-40" @click="showPageMenu = false" />
-            <div v-if="showPageMenu" class="fixed z-50 w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-1" :style="pageMenuStyle" @click.stop>
-              <button class="page-menu-item" @click="handleImportHtml">📥 导入 HTML 文件</button>
-              <button class="page-menu-item" @click="handleImportMd">📝 导入 Markdown 文件</button>
-              <div class="my-1 border-t border-slate-100" />
-              <button class="page-menu-item" @click="showPageMenu = false; $emit('pageAction', 'rename')">✏️ 重命名</button>
-              <button class="page-menu-item" @click="showPageMenu = false; $emit('pageAction', 'duplicate')">📋 拷贝副本</button>
-              <button class="page-menu-item text-red-600 hover:bg-red-50" @click="showPageMenu = false; $emit('pageAction', 'delete')">🗑️ 删除</button>
-            </div>
-          </Teleport>
-        </div>
+        <!-- "..." 页面设置 -->
+        <button
+          v-if="page"
+          class="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+          :class="{ 'bg-slate-100 text-slate-600': showSettingsPanel }"
+          title="页面设置"
+          @click="showSettingsPanel = !showSettingsPanel"
+        >
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM16 12a2 2 0 100-4 2 2 0 000 4z" /></svg>
+        </button>
       </div>
     </header>
 
     <!-- ===== 内容区 ===== -->
-    <div class="flex-1 overflow-y-auto">
-      <!-- 空状态 -->
-      <div v-if="!page" class="flex items-center justify-center h-full text-slate-400">
-        <div class="text-center">
-          <div class="text-5xl mb-4">📝</div>
-          <p class="text-lg font-medium text-slate-500">选择或创建一个页面</p>
-          <p class="text-sm mt-1">从左侧侧边栏开始你的知识之旅</p>
+    <div class="flex-1 flex overflow-hidden">
+      <!-- 主内容区 -->
+      <div class="flex-1 overflow-y-auto" ref="contentAreaRef">
+        <!-- 空状态 -->
+        <div v-if="!page" class="flex items-center justify-center h-full text-slate-400">
+          <div class="text-center">
+            <div class="text-5xl mb-4">📝</div>
+            <p class="text-lg font-medium text-slate-500">选择或创建一个页面</p>
+            <p class="text-sm mt-1">从左侧侧边栏开始你的知识之旅</p>
+          </div>
+        </div>
+
+        <!-- 加载中 -->
+        <div v-else-if="pageStore.loading" class="flex items-center justify-center h-full">
+          <div class="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+
+        <!-- Block 内容 -->
+        <div v-else :class="['mx-auto px-8 py-8', pageSettings.adaptiveWidth ? 'max-w-full' : 'max-w-3xl', pageSettings.smallFont ? 'text-sm' : '']">
+          <BlockRenderer
+            v-for="(block, idx) in page.blocks"
+            :key="block.id"
+            :block="block"
+            :all-pages="flatPages"
+            :settings="pageSettings"
+            :heading-number="headingNumbers.get(block.id) || ''"
+            @save="(c) => onBlockSave(block.id, c)"
+            @change-type="(t) => onChangeBlockType(block.id, t)"
+            @navigate="(id) => $emit('navigate', id)"
+            @delete="onBlockDelete(block.id)"
+            @duplicate="onBlockDuplicate(block.id)"
+            @move-up="onBlockMove(idx, -1)"
+            @move-down="onBlockMove(idx, 1)"
+          />
+
+          <!-- 添加 Block 按钮 -->
+          <div class="relative mt-3" ref="addBlockRef">
+            <button
+              v-if="page"
+              class="w-full py-3 text-sm text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all border border-dashed border-slate-200 flex items-center justify-center gap-2"
+              @click="showAddBlock = !showAddBlock"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+              添加内容
+            </button>
+            <Teleport to="body">
+              <div v-if="showAddBlock" class="fixed inset-0 z-40" @click="showAddBlock = false" />
+              <div v-if="showAddBlock" class="fixed z-50 w-64 bg-white rounded-xl shadow-lg border border-slate-200 py-1" :style="addBlockStyle" @click.stop>
+                <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">基础块</div>
+                <button v-for="bt in baseBlocks" :key="bt.type" class="block-menu-item" @click="addBlock(bt.type, bt.default)">
+                  <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg">{{ bt.icon }}</span>
+                  <div class="flex-1 text-left">
+                    <div class="text-sm font-medium">{{ bt.label }}</div>
+                    <div class="text-[10px] text-slate-400">{{ bt.shortcut }}</div>
+                  </div>
+                </button>
+                <div class="my-1 border-t border-slate-100" />
+                <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">媒体 &amp; 嵌入</div>
+                <button v-for="bt in mediaBlocks" :key="bt.type" class="block-menu-item" @click="addBlock(bt.type, bt.default)">
+                  <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg">{{ bt.icon }}</span>
+                  <div class="flex-1 text-left">
+                    <div class="text-sm font-medium">{{ bt.label }}</div>
+                    <div class="text-[10px] text-slate-400">{{ bt.shortcut }}</div>
+                  </div>
+                </button>
+              </div>
+            </Teleport>
+          </div>
         </div>
       </div>
 
-      <!-- 加载中 -->
-      <div v-else-if="pageStore.loading" class="flex items-center justify-center h-full">
-        <div class="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-
-      <!-- Block 内容 -->
-      <div v-else class="max-w-3xl mx-auto px-8 py-8">
-        <BlockRenderer
-          v-for="(block, idx) in page.blocks"
-          :key="block.id"
-          :block="block"
-          :all-pages="flatPages"
-          @save="(c) => onBlockSave(block.id, c)"
-          @change-type="(t) => onChangeBlockType(block.id, t)"
-          @navigate="(id) => $emit('navigate', id)"
-          @delete="onBlockDelete(block.id)"
-          @duplicate="onBlockDuplicate(block.id)"
-          @move-up="onBlockMove(idx, -1)"
-          @move-down="onBlockMove(idx, 1)"
-        />
-
-        <!-- 添加 Block 按钮 -->
-        <div class="relative mt-3" ref="addBlockRef">
-          <button
-            v-if="page"
-            class="w-full py-3 text-sm text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all border border-dashed border-slate-200 flex items-center justify-center gap-2"
-            @click="showAddBlock = !showAddBlock"
-          >
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
-            添加内容
-          </button>
-          <Teleport to="body">
-            <div v-if="showAddBlock" class="fixed inset-0 z-40" @click="showAddBlock = false" />
-            <div v-if="showAddBlock" class="fixed z-50 w-64 bg-white rounded-xl shadow-lg border border-slate-200 py-1" :style="addBlockStyle" @click.stop>
-              <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">基础块</div>
-              <button v-for="bt in baseBlocks" :key="bt.type" class="block-menu-item" @click="addBlock(bt.type, bt.default)">
-                <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg">{{ bt.icon }}</span>
-                <div class="flex-1 text-left">
-                  <div class="text-sm font-medium">{{ bt.label }}</div>
-                  <div class="text-[10px] text-slate-400">{{ bt.shortcut }}</div>
-                </div>
-              </button>
-              <div class="my-1 border-t border-slate-100" />
-              <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">媒体 &amp; 嵌入</div>
-              <button v-for="bt in mediaBlocks" :key="bt.type" class="block-menu-item" @click="addBlock(bt.type, bt.default)">
-                <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg">{{ bt.icon }}</span>
-                <div class="flex-1 text-left">
-                  <div class="text-sm font-medium">{{ bt.label }}</div>
-                  <div class="text-[10px] text-slate-400">{{ bt.shortcut }}</div>
-                </div>
-              </button>
+      <!-- ===== 标题目录侧栏（行内右侧） ===== -->
+      <aside
+        v-if="pageSettings.showToc && page && headingTree.length > 0"
+        class="w-56 shrink-0 overflow-y-auto border-l border-slate-100 bg-white"
+      >
+        <div class="px-3 py-4">
+          <h4 class="text-xs font-semibold text-slate-400 mb-3 px-1">目录</h4>
+          <nav class="space-y-0">
+            <div v-for="(node, idx) in visibleHeadings" :key="node.blockId">
+              <div
+                class="flex items-center group/toc rounded hover:bg-slate-50 transition-colors cursor-pointer"
+                :style="{ paddingLeft: `${(node.level - minHeadingLevel) * 12 + 4}px` }"
+                @click="scrollToBlock(node.blockId)"
+              >
+                <!-- 折叠/展开按钮 -->
+                <button
+                  v-if="node.children.length > 0"
+                  class="w-5 h-5 shrink-0 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors rounded"
+                  @click.stop="toggleCollapse(node.blockId)"
+                >
+                  <svg class="w-3 h-3 transition-transform" :class="collapsedMap[node.blockId] ? '' : 'rotate-90'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" /></svg>
+                </button>
+                <!-- 占位（无子标题时对齐） -->
+                <span v-else class="w-5 h-5 shrink-0" />
+                <!-- 标题文字 -->
+                <span
+                  class="text-sm py-1 truncate flex-1"
+                  :class="node.level === minHeadingLevel ? 'font-semibold text-slate-700' : 'text-slate-500 hover:text-slate-700'"
+                  :title="node.text"
+                >
+                  <span v-if="pageSettings.autoNumbering" class="text-slate-400 mr-1 font-mono text-[0.8em]">{{ node.number }}</span>
+                  {{ node.text }}
+                </span>
+              </div>
             </div>
-          </Teleport>
+          </nav>
         </div>
-      </div>
+      </aside>
     </div>
+
+    <!-- ===== 右侧设置面板 ===== -->
+    <PageSettingsPanel
+      :visible="showSettingsPanel"
+      :page="page"
+      @close="showSettingsPanel = false"
+      @update-settings="onSettingsUpdate"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePageStore } from '@/stores/page'
 import { pagesApi } from '@/api/pages'
 import type { PageTreeNode } from '@/types'
 import BlockRenderer from './BlockRenderer.vue'
+import PageSettingsPanel from './PageSettingsPanel.vue'
+import type { PageSettings } from './PageSettingsPanel.vue'
 
 const emit = defineEmits<{ navigate: [id: number]; toggleSidebar: []; pageAction: [type: string] }>()
 
@@ -198,14 +242,149 @@ function flattenTree(nodes: PageTreeNode[]): PageTreeNode[] {
 }
 const flatPages = computed(() => flattenTree(pageStore.tree))
 
-// ===== 头部 =====
-const showPageMenu = ref(false)
-const pageMenuRef = ref<HTMLElement>()
-const pageMenuStyle = ref<Record<string, string>>({})
-function togglePageMenu(e: MouseEvent) {
-  showPageMenu.value = !showPageMenu.value
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  pageMenuStyle.value = { top: `${rect.bottom + 4}px`, right: `${window.innerWidth - rect.right}px` }
+// ===== 标题目录：树结构与折叠 =====
+interface TocNode {
+  blockId: number
+  level: number
+  text: string
+  number: string
+  children: TocNode[]
+}
+
+// 标题树
+const headingTree = computed<TocNode[]>(() => {
+  if (!page.value?.blocks) return []
+  const root: TocNode[] = []
+  const stack: TocNode[] = []
+  const counters = [0, 0, 0, 0, 0, 0]
+
+  for (const block of page.value.blocks) {
+    if (block.type !== 'heading') continue
+    const level = Number((block.content as Record<string, unknown>).level) || 1
+    if (level < 1 || level > 6) continue
+    const text = String((block.content as Record<string, unknown>).text || '').trim()
+    if (!text) continue
+
+    // 编号
+    counters[level - 1]++
+    for (let l = level; l < 6; l++) counters[l] = 0
+    const number = counters.slice(0, level).join('.')
+
+    const node: TocNode = { blockId: block.id, level, text, number, children: [] }
+
+    // 找到父节点：栈中层级小于当前层级的最近节点
+    while (stack.length > 0 && stack[stack.length - 1].level >= level) {
+      stack.pop()
+    }
+    if (stack.length > 0) {
+      stack[stack.length - 1].children.push(node)
+    } else {
+      root.push(node)
+    }
+    stack.push(node)
+  }
+  return root
+})
+
+// 页面中最低的标题层级（用于计算缩进）
+const minHeadingLevel = computed(() => {
+  if (headingTree.value.length === 0) return 1
+  let min = 6
+  for (const node of headingTree.value) {
+    min = Math.min(min, node.level)
+  }
+  return min
+})
+
+// 折叠状态（key: blockId）
+const collapsedMap = ref<Record<number, boolean>>({})
+
+// 初始化折叠状态：默认只展开前两级（相对层级）
+watch(headingTree, (tree) => {
+  const map: Record<number, boolean> = {}
+  const initCollapse = (nodes: TocNode[], depthFromMin: number) => {
+    for (const node of nodes) {
+      // depthFromMin >= 2 即第三级及以上默认折叠
+      map[node.blockId] = depthFromMin >= 2
+      initCollapse(node.children, depthFromMin + 1)
+    }
+  }
+  initCollapse(tree, 0)
+  collapsedMap.value = map
+}, { immediate: true })
+
+// 可见标题（扁平化，尊重折叠状态）
+const visibleHeadings = computed<TocNode[]>(() => {
+  const result: TocNode[] = []
+  const walk = (nodes: TocNode[]) => {
+    for (const node of nodes) {
+      result.push(node)
+      if (!collapsedMap.value[node.blockId]) {
+        walk(node.children)
+      }
+    }
+  }
+  walk(headingTree.value)
+  return result
+})
+
+function toggleCollapse(blockId: number) {
+  collapsedMap.value = {
+    ...collapsedMap.value,
+    [blockId]: !collapsedMap.value[blockId],
+  }
+}
+
+// ===== 标题自动编号：计算每个 heading block 的编号 =====
+const headingNumbers = computed(() => {
+  const map = new Map<number, string>()
+  if (!page.value?.blocks) return map
+  const counters = [0, 0, 0, 0, 0, 0]
+  for (const block of page.value.blocks) {
+    if (block.type !== 'heading') continue
+    const level = Number((block.content as Record<string, unknown>).level) || 1
+    if (level < 1 || level > 6) continue
+    counters[level - 1]++
+    for (let l = level; l < 6; l++) counters[l] = 0
+    map.set(block.id, counters.slice(0, level).join('.'))
+  }
+  return map
+})
+
+// ===== 页面设置面板 =====
+const showSettingsPanel = ref(false)
+const pageSettings = ref<PageSettings>({
+  adaptiveWidth: false,
+  smallFont: false,
+  showToc: false,
+  autoNumbering: false,
+})
+const contentAreaRef = ref<HTMLElement>()
+
+// 从 localStorage 加载设置
+function loadPageSettings() {
+  try {
+    const raw = localStorage.getItem('page-settings')
+    if (raw) {
+      pageSettings.value = { ...pageSettings.value, ...JSON.parse(raw) }
+    }
+  } catch { /* ignore */ }
+}
+loadPageSettings()
+
+function onSettingsUpdate(settings: PageSettings) {
+  pageSettings.value = { ...settings }
+}
+
+/** 滚动到指定 block */
+function scrollToBlock(blockId: number) {
+  const container = contentAreaRef.value
+  if (!container) return
+  // 通过 data-block-id 属性查找对应的 DOM 元素
+  const el = container.querySelector(`[data-block-id="${blockId}"]`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 }
 
 async function togglePin() {
@@ -219,18 +398,6 @@ async function onTitleChange(e: Event) {
   await pagesApi.update(page.value.id, { title })
   page.value.title = title
   await pageStore.fetchTree()
-}
-
-// 导入文件
-const fileInput = ref<HTMLInputElement>()
-const importFormat = ref<'html' | 'md'>('md')
-function handleImportHtml() { showPageMenu.value = false; importFormat.value = 'html'; fileInput.value?.click() }
-function handleImportMd() { showPageMenu.value = false; importFormat.value = 'md'; fileInput.value?.click() }
-async function onFileChange(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0]
-  if (!file || !page.value) return
-  const text = await file.text()
-  await pageStore.importToPage(page.value.id, text, importFormat.value)
 }
 
 // ===== Block 添加 =====
