@@ -335,13 +335,32 @@ frontend/
 
 - Python 3.9+
 - Node.js 18+（前端开发）
-- 已创建 Python 虚拟环境 `venv/`
 
-### 7.2 后端
+### 7.2 一键启动（推荐）
+
+项目根目录提供了两种一键启动脚本，自动完成环境检测、虚拟环境创建、依赖安装和服务启动：
+
+| 脚本 | 适用场景 | 运行方式 |
+|------|---------|---------|
+| `start.bat` | CMD / 传统终端 | 双击运行 |
+| `start.ps1` | PowerShell（推荐） | `powershell -ExecutionPolicy Bypass -File start.ps1` |
+
+**脚本自动执行流程：**
+
+```
+[1/5] 检测运行环境  → 检查 Python / Node.js 是否安装，缺失则提供下载地址
+[2/5] 配置虚拟环境  → 无 venv/ 则自动创建 python -m venv venv
+[3/5] 检查后端依赖  → 未安装时自动 pip install -r requirements.txt
+[4/5] 检查前端依赖  → frontend/node_modules 不存在时自动 npm install
+[5/5] 启动服务      → 分别在独立窗口中启动后端 (:8000) 和前端 (:5173)
+```
+
+> **注意**：PowerShell 脚本需 UTF-8 BOM 编码以支持中文显示。若遇到执行策略限制，请使用 `-ExecutionPolicy Bypass` 参数。
+
+### 7.3 后端（手动启动）
 
 ```powershell
-# 进入项目目录
-cd D:\PythonProject\笔记
+# 在项目根目录下执行
 
 # 激活虚拟环境（Windows）
 .\venv\Scripts\Activate.ps1
@@ -358,11 +377,11 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 - API 文档：http://127.0.0.1:8000/docs
 - 旧版页面：http://127.0.0.1:8000/Taot
 
-### 7.3 前端
+### 7.4 前端（手动启动）
 
 ```powershell
 # 进入前端目录
-cd D:\PythonProject\笔记\frontend
+cd .\frontend
 
 # 安装依赖（首次）
 npm install
@@ -375,7 +394,7 @@ npm run dev
 
 > 需同时启动后端（8000 端口），前端通过 Vite 代理转发 `/Taot` 请求。
 
-### 7.4 环境变量（可选）
+### 7.5 环境变量（可选）
 
 在项目根目录创建 `.env` 文件：
 
@@ -385,7 +404,7 @@ DATABASE_URL=sqlite+aiosqlite:///./blog.db
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 ```
 
-### 7.5 快速验证 API
+### 7.6 快速验证 API
 
 ```powershell
 # 注册用户
