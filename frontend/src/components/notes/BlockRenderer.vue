@@ -1,20 +1,51 @@
 <template>
   <div
-    class="block-item group relative flex gap-2"
-    :class="{ 'bg-slate-50/50 -mx-4 px-4 rounded-lg': showHandle }"
+    class="block-item group relative flex gap-2 transition-all duration-150 mb-2"
+    :class="{
+      'bg-slate-50/50 -mx-4 px-4 rounded-lg': showHandle,
+      'opacity-30': isDragging,
+      'border-t-2 border-brand-400': dragOverPosition === 'above',
+      'border-b-2 border-brand-400': dragOverPosition === 'below',
+    }"
     :data-block-id="block.id"
     @mouseenter="showHandle = true"
-    @mouseleave="showHandle = false"
+    @mouseleave="onMouseLeave"
     @contextmenu.prevent="onContextMenu"
+    @dragover.prevent="onDragOver"
+    @dragleave="onDragLeave"
+    @drop.prevent="onDrop"
   >
     <!-- ===== 左侧拖拽手柄 + 操作按钮 ===== -->
-    <div class="relative shrink-0 pt-1.5" :class="{ 'opacity-0 group-hover:opacity-100': !blockMenuOpen }" :style="{ opacity: blockMenuOpen ? 1 : undefined }">
+    <div class="relative shrink-0 pt-1.5" :class="{ 'opacity-0 group-hover:opacity-100': !blockMenuOpen && !isDragging }" :style="{ opacity: blockMenuOpen || isDragging ? 1 : undefined }">
+      <!-- 上方插入按钮 -->
       <button
-        class="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-colors cursor-grab"
-        title="拖拽移动 / 点击查看选项"
-        @click.stop="toggleBlockMenu"
+        class="block-insert-btn block-insert-btn-top"
+        title="在上方插入"
+        @click.stop="$emit('insertAbove')"
       >
-        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>
+        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 4v16m8-8H4" /></svg>
+      </button>
+
+      <!-- 拖拽手柄 -->
+      <button
+        class="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-colors cursor-grab active:cursor-grabbing"
+        :class="{ 'text-brand-500 bg-brand-50': isDragging }"
+        title="拖拽移动 / 点击查看选项"
+        draggable="true"
+        @click.stop="toggleBlockMenu"
+        @dragstart="onDragStart"
+        @dragend="onDragEnd"
+      >
+        <svg class="w-4 h-4 pointer-events-none" fill="currentColor" viewBox="0 0 20 20"><path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>
+      </button>
+
+      <!-- 下方插入按钮 -->
+      <button
+        class="block-insert-btn block-insert-btn-bottom"
+        title="在下方插入"
+        @click.stop="$emit('insertBelow')"
+      >
+        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 4v16m8-8H4" /></svg>
       </button>
 
       <!-- Block 操作下拉菜单 -->
@@ -92,7 +123,7 @@
           class="w-full resize-none bg-transparent border-none outline-none text-slate-700 leading-relaxed"
           rows="1"
           @blur="saveEdit"
-          @keydown.enter.exact="saveEdit"
+          @keydown.enter.exact="$event.preventDefault(); onEnterInEdit()"
           @keydown.escape="cancelEdit"
           @keydown="onEditKeydown"
           @input="autoResize"
@@ -117,7 +148,7 @@
           v-model="editText"
           class="w-full bg-transparent border-none outline-none font-bold"
           @blur="saveEdit"
-          @keydown.enter="saveEdit"
+          @keydown.enter.prevent="onEnterInEdit"
           @keydown.escape="cancelEdit"
           @keydown="onEditKeydown"
         />
@@ -130,16 +161,42 @@
             <span class="text-[10px] font-mono text-slate-400 uppercase">{{ language || 'text' }}</span>
             <button class="text-[10px] text-slate-400 hover:text-slate-600" @click.stop="copyCode">复制</button>
           </div>
-          <pre class="bg-slate-900 text-slate-100 rounded-xl p-4 text-sm overflow-x-auto font-mono min-h-[3em]"><code>{{ code || '点击编辑代码...' }}</code></pre>
+          <pre
+            class="bg-slate-900 rounded-xl p-4 text-sm overflow-x-auto font-mono min-h-[3em]"
+            :class="{ 'opacity-50': !code }"
+          ><code v-if="code" class="hljs-code-block" v-html="highlightedCode" /><code v-else class="text-slate-400">点击编辑代码...</code></pre>
         </div>
         <div v-else class="bg-slate-900 rounded-xl overflow-hidden">
-          <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-700">
-            <input
-              v-model="editLanguage"
-              class="bg-transparent text-[10px] font-mono text-slate-400 uppercase outline-none w-20"
-              placeholder="text"
-              @keydown.escape="cancelEdit"
-            />
+          <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-700 relative">
+            <!-- 语言下拉选择器 -->
+            <div class="relative" @click.stop>
+              <button
+                class="flex items-center gap-1 text-[10px] font-mono text-slate-400 uppercase hover:text-slate-200 transition-colors px-1.5 py-0.5 rounded hover:bg-slate-800"
+                @click="showLangDropdown = !showLangDropdown"
+              >
+                {{ editLanguage || 'text' }}
+                <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M19 9l-7 7-7-7" /></svg>
+              </button>
+              <!-- 下拉面板 -->
+              <div v-if="showLangDropdown" class="absolute top-full left-0 mt-1 w-44 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-30 py-1 max-h-48 overflow-y-auto">
+                <input
+                  v-model="langSearchText"
+                  class="w-full bg-slate-700 text-slate-200 text-[11px] px-2 py-1.5 outline-none border-b border-slate-600"
+                  placeholder="搜索语言..."
+                  @keydown.escape="showLangDropdown = false"
+                />
+                <button
+                  v-for="opt in filteredLangOptions"
+                  :key="opt.value"
+                  class="w-full flex items-center justify-between px-3 py-1.5 text-[11px] transition-colors text-left"
+                  :class="editLanguage === opt.value ? 'text-brand-400 bg-brand-500/10' : 'text-slate-300 hover:bg-slate-700'"
+                  @click="selectLanguage(opt.value)"
+                >
+                  <span class="font-mono">{{ opt.label }}</span>
+                  <svg v-if="editLanguage === opt.value" class="w-3 h-3 text-brand-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" /></svg>
+                </button>
+              </div>
+            </div>
             <div class="flex-1" />
             <button class="text-[10px] text-slate-400 hover:text-slate-200" @click="copyCode">复制</button>
           </div>
@@ -167,7 +224,7 @@
           v-model="editText"
           class="w-full resize-none bg-transparent border-none outline-none text-slate-600 italic"
           @blur="saveEdit"
-          @keydown.enter.exact="saveEdit"
+          @keydown.enter.exact="$event.preventDefault(); onEnterInEdit()"
           @keydown.escape="cancelEdit"
           @keydown="onEditKeydown"
         />
@@ -209,7 +266,7 @@
             class="flex-1 resize-none bg-transparent border-none outline-none text-slate-700 leading-relaxed"
             rows="1"
             @blur="saveListEdit"
-            @keydown.enter.exact="saveListEdit"
+            @keydown.enter.exact.prevent="onEnterInEditList"
             @keydown.escape="cancelEdit"
             @keydown="onEditKeydown"
           />
@@ -243,7 +300,7 @@
             v-model="editText"
             class="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-brand-400"
             placeholder="输入图片URL..."
-            @keydown.enter="saveEdit"
+            @keydown.enter.prevent="onEnterInEdit"
             @keydown.escape="cancelEdit"
             @blur="saveEdit"
           />
@@ -292,8 +349,37 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import type { Block, PageTreeNode } from '@/types'
+import hljs from 'highlight.js'
+import python from 'highlight.js/lib/languages/python'
+import bash from 'highlight.js/lib/languages/bash'
+import xml from 'highlight.js/lib/languages/xml'
+import css from 'highlight.js/lib/languages/css'
+import javascript from 'highlight.js/lib/languages/javascript'
+import json from 'highlight.js/lib/languages/json'
+import typescript from 'highlight.js/lib/languages/typescript'
+import sql from 'highlight.js/lib/languages/sql'
+import yaml from 'highlight.js/lib/languages/yaml'
+import markdown from 'highlight.js/lib/languages/markdown'
+
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('shell', bash)
+hljs.registerLanguage('sh', bash)
+hljs.registerLanguage('xml', xml)
+hljs.registerLanguage('html', xml)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('js', javascript)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('ts', typescript)
+hljs.registerLanguage('sql', sql)
+hljs.registerLanguage('yaml', yaml)
+hljs.registerLanguage('yml', yaml)
+hljs.registerLanguage('markdown', markdown)
+hljs.registerLanguage('md', markdown)
 
 const props = defineProps<{
   block: Block
@@ -315,6 +401,10 @@ const emit = defineEmits<{
   duplicate: []
   moveUp: []
   moveDown: []
+  createBelow: []
+  insertAbove: []
+  insertBelow: []
+  moveTo: [targetIndex: number]
 }>()
 
 const showHandle = ref(false)
@@ -322,6 +412,101 @@ const editing = ref(false)
 const editText = ref('')
 const editLanguage = ref('')
 const inputRef = ref<HTMLInputElement | HTMLTextAreaElement | null>(null)
+
+// ===== 空 Block 双击 Backspace 删除 =====
+const backspacePressedOnce = ref(false)
+
+// 内容变化时重置 Backspace 标志位
+watch(editText, () => {
+  backspacePressedOnce.value = false
+})
+
+// ===== 拖拽排序状态 =====
+const isDragging = ref(false)
+const dragOverPosition = ref<'above' | 'below' | null>(null)
+let dragSourceIndex = -1
+
+function onDragStart(e: DragEvent) {
+  if (!e.dataTransfer) return
+  isDragging.value = true
+  dragSourceIndex = getBlockIndex()
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('text/plain', String(props.block.id))
+}
+
+function onDragEnd() {
+  isDragging.value = false
+  dragOverPosition.value = null
+}
+
+function onDragOver(e: DragEvent) {
+  if (!e.dataTransfer || isDragging.value) return
+  e.dataTransfer.dropEffect = 'move'
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const midY = rect.top + rect.height / 2
+  dragOverPosition.value = e.clientY < midY ? 'above' : 'below'
+}
+
+function onDragLeave() {
+  dragOverPosition.value = null
+}
+
+function onDrop(e: DragEvent) {
+  dragOverPosition.value = null
+  const targetIndex = getBlockIndex()
+  if (targetIndex >= 0 && dragSourceIndex >= 0 && targetIndex !== dragSourceIndex) {
+    emit('moveTo', targetIndex)
+  }
+}
+
+function getBlockIndex(): number {
+  const el = document.querySelector(`[data-block-id="${props.block.id}"]`)
+  if (!el) return -1
+  const parent = el.parentElement
+  if (!parent) return -1
+  const items = parent.querySelectorAll('[data-block-id]')
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].getAttribute('data-block-id') === String(block.id)) return i
+  }
+  return -1
+}
+
+function onMouseLeave() {
+  showHandle.value = false
+  dragOverPosition.value = null
+}
+
+// ===== 语言下拉选择器 =====
+const showLangDropdown = ref(false)
+const langSearchText = ref('')
+
+const languageOptions = [
+  { label: 'Bash / Shell', value: 'bash' },
+  { label: 'CSS', value: 'css' },
+  { label: 'HTML / XML', value: 'html' },
+  { label: 'JavaScript / JS', value: 'javascript' },
+  { label: 'JSON', value: 'json' },
+  { label: 'Markdown / MD', value: 'markdown' },
+  { label: 'Python', value: 'python' },
+  { label: 'SQL', value: 'sql' },
+  { label: 'TypeScript / TS', value: 'typescript' },
+  { label: 'YAML / YML', value: 'yaml' },
+  { label: '纯文本', value: 'text' },
+]
+
+const filteredLangOptions = computed(() => {
+  const q = langSearchText.value.toLowerCase().trim()
+  if (!q) return languageOptions
+  return languageOptions.filter(
+    opt => opt.label.toLowerCase().includes(q) || opt.value.toLowerCase().includes(q)
+  )
+})
+
+function selectLanguage(lang: string) {
+  editLanguage.value = lang
+  showLangDropdown.value = false
+  langSearchText.value = ''
+}
 
 // 新创建的空 block 自动进入编辑模式
 onMounted(() => {
@@ -535,6 +720,19 @@ function saveCodeEdit() {
   }
 }
 
+/** Enter 键：保存当前 Block 并创建新 Block */
+function onEnterInEdit() {
+  if (!editing.value) return
+  saveEdit()
+  nextTick(() => emit('createBelow'))
+}
+
+function onEnterInEditList() {
+  if (!editing.value) return
+  saveListEdit()
+  nextTick(() => emit('createBelow'))
+}
+
 function saveListEdit() {
   if (!editing.value) return
   const newText = editText.value.trim()
@@ -579,8 +777,45 @@ const formattedText = computed(() => renderInlineMarkdown(text.value))
 const formattedListText = computed(() => renderInlineMarkdown(listText.value))
 const placeholderClass = 'text-slate-400 select-none'
 
+// ===== 代码语法高亮 =====
+const highlightedCode = computed(() => {
+  const rawCode = code.value
+  if (!rawCode) return ''
+  const lang = language.value.toLowerCase()
+  if (lang && hljs.getLanguage(lang)) {
+    try {
+      return hljs.highlight(rawCode, { language: lang }).value
+    } catch {
+      // 高亮失败时回退为纯文本
+    }
+  }
+  return hljs.highlightAuto(rawCode).value
+})
+
 // ===== 编辑模式键盘快捷键 =====
 function onEditKeydown(e: KeyboardEvent) {
+  // 空 Block 双击 Backspace 删除
+  if (e.key === 'Backspace') {
+    const el = inputRef.value
+    const isEmpty = !editText.value
+    const atStart = el ? (el.selectionStart ?? 0) === 0 && (el.selectionEnd ?? 0) === 0 : true
+    if (isEmpty && atStart) {
+      if (backspacePressedOnce.value) {
+        e.preventDefault()
+        backspacePressedOnce.value = false
+        editing.value = false
+        emit('delete')
+      } else {
+        e.preventDefault()
+        backspacePressedOnce.value = true
+      }
+      return
+    }
+    backspacePressedOnce.value = false
+  } else {
+    backspacePressedOnce.value = false
+  }
+
   const ctrl = e.ctrlKey || e.metaKey
   if (ctrl && e.key === 'b') {
     e.preventDefault(); wrapSelection('**')
@@ -592,8 +827,6 @@ function onEditKeydown(e: KeyboardEvent) {
     e.preventDefault(); insertLink()
   } else if (ctrl && e.shiftKey && e.key === 'K') {
     e.preventDefault(); emit('changeType', 'code')
-  } else if (e.key === 'Enter' && e.shiftKey) {
-    e.preventDefault(); insertAtCursor('\n')
   } else if (ctrl && e.key >= '1' && e.key <= '6') {
     e.preventDefault()
     const lv = parseInt(e.key)
@@ -714,5 +947,108 @@ async function toggleTaskItem(index: number) {
 <style scoped>
 .block-menu-item {
   @apply w-full flex items-center gap-2 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left;
+}
+
+/* 插入按钮 */
+.block-insert-btn {
+  @apply absolute left-1/2 -translate-x-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-white border border-transparent text-slate-400 hover:text-brand-500 hover:border-brand-300 hover:bg-brand-50 transition-all shadow-sm opacity-0 group-hover:opacity-100 z-10;
+}
+.block-insert-btn-top {
+  top: -14px;
+}
+.block-insert-btn-bottom {
+  bottom: -14px;
+}
+
+/* 拖拽时保持操作区可见 */
+.block-item [draggable="true"] {
+  touch-action: none;
+}
+</style>
+
+<!-- highlight.js 暗色主题（与 bg-slate-900 背景协调） -->
+<style>
+/* 代码高亮容器 - 重置为 highlight.js 控制颜色 */
+.hljs-code-block {
+  background: transparent !important;
+  padding: 0 !important;
+  color: #e2e8f0;
+}
+
+/* highlight.js 暗色主题 */
+.hljs-code-block .hljs-keyword,
+.hljs-code-block .hljs-selector-tag,
+.hljs-code-block .hljs-literal,
+.hljs-code-block .hljs-section,
+.hljs-code-block .hljs-link {
+  color: #c084fc;
+}
+
+.hljs-code-block .hljs-string,
+.hljs-code-block .hljs-title.class_,
+.hljs-code-block .hljs-title.class_ .hljs-title {
+  color: #86efac;
+}
+
+.hljs-code-block .hljs-number,
+.hljs-code-block .hljs-meta .hljs-string,
+.hljs-code-block .hljs-built_in {
+  color: #fde68a;
+}
+
+.hljs-code-block .hljs-title.function_ {
+  color: #93c5fd;
+}
+
+.hljs-code-block .hljs-comment,
+.hljs-code-block .hljs-quote {
+  color: #64748b;
+  font-style: italic;
+}
+
+.hljs-code-block .hljs-attr,
+.hljs-code-block .hljs-attribute,
+.hljs-code-block .hljs-variable,
+.hljs-code-block .hljs-template-variable,
+.hljs-code-block .hljs-type {
+  color: #f9a8d4;
+}
+
+.hljs-code-block .hljs-meta,
+.hljs-code-block .hljs-selector-attr,
+.hljs-code-block .hljs-selector-pseudo {
+  color: #c084fc;
+}
+
+.hljs-code-block .hljs-tag {
+  color: #f472b6;
+}
+
+.hljs-code-block .hljs-name {
+  color: #f472b6;
+}
+
+.hljs-code-block .hljs-regexp,
+.hljs-code-block .hljs-symbol,
+.hljs-code-block .hljs-template-tag,
+.hljs-code-block .hljs-bullet,
+.hljs-code-block .hljs-code {
+  color: #fb923c;
+}
+
+.hljs-code-block .hljs-subst {
+  color: #e2e8f0;
+}
+
+.hljs-code-block .hljs-formula {
+  color: #67e8f9;
+}
+
+.hljs-code-block .hljs-selector-class {
+  color: #86efac;
+}
+
+.hljs-code-block .hljs-params {
+  color: #e2e8f0;
 }
 </style>

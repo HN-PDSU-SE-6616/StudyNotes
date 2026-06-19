@@ -114,6 +114,16 @@ export const usePageStore = defineStore('page', () => {
     return data
   }
 
+  /** 在指定索引处插入 Block（本地立即更新，后续需调用 reorderBlocks 同步排序） */
+  async function insertBlockAt(pageId: number, index: number, type: string, content: Record<string, unknown> = {}) {
+    const sortOrder = currentPage.value?.blocks.length ?? 0
+    const { data } = await blocksApi.create(pageId, { type, content, sort_order: sortOrder })
+    if (currentPage.value?.id === pageId) {
+      currentPage.value.blocks.splice(index, 0, data)
+    }
+    return data
+  }
+
   async function updateBlock(blockId: number, payload: Record<string, unknown>) {
     const { data } = await blocksApi.update(blockId, payload)
     if (currentPage.value) {
@@ -191,6 +201,7 @@ export const usePageStore = defineStore('page', () => {
     deletePage,
     duplicatePage,
     addBlock,
+    insertBlockAt,
     updateBlock,
     deleteBlock,
     duplicateBlock,

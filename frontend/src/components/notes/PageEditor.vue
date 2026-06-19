@@ -80,7 +80,7 @@
     </header>
 
     <!-- ===== 内容区 ===== -->
-    <div class="flex-1 flex overflow-hidden">
+    <div class="flex-1 flex overflow-hidden transition-all duration-300" :style="contentAreaStyle">
       <!-- 主内容区 -->
       <div class="flex-1 overflow-y-auto" ref="contentAreaRef">
         <!-- 空状态 -->
@@ -113,6 +113,10 @@
             @duplicate="onBlockDuplicate(block.id)"
             @move-up="onBlockMove(idx, -1)"
             @move-down="onBlockMove(idx, 1)"
+            @create-below="onCreateBelow(idx)"
+            @insert-above="onInsertAt(idx)"
+            @insert-below="onInsertAt(idx + 1)"
+            @move-to="(targetIdx) => onMoveTo(idx, targetIdx)"
           />
 
           <!-- 添加 Block 按钮 -->
@@ -151,11 +155,19 @@
         </div>
       </div>
 
-      <!-- ===== 标题目录侧栏（行内右侧） ===== -->
+      <!-- ===== 标题目录侧栏（行内右侧，可拖拽调整宽度） ===== -->
       <aside
         v-if="pageSettings.showToc && page && headingTree.length > 0"
-        class="w-56 shrink-0 overflow-y-auto border-l border-slate-100 bg-white"
+        class="shrink-0 overflow-y-auto border-l border-slate-100 bg-white relative"
+        :style="{ width: tocWidth + 'px' }"
       >
+        <!-- 拖拽调整宽度手柄 -->
+        <div
+          class="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-brand-400/30 transition-colors group/resize z-10"
+          @mousedown="onTocResizeStart"
+        >
+          <div class="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-8 bg-slate-200 group-hover/resize:bg-brand-400 transition-colors rounded" />
+        </div>
         <div class="px-3 py-4">
           <h4 class="text-xs font-semibold text-slate-400 mb-3 px-1">目录</h4>
           <nav class="space-y-0">
@@ -353,6 +365,37 @@ const headingNumbers = computed(() => {
 
 // ===== 页面设置面板 =====
 const showSettingsPanel = ref(false)
+
+// 主内容区样式：当右侧设置面板打开时，为 TOC 预留空间
+const contentAreaStyle = computed(() => {
+  if (showSettingsPanel.value) {
+    return { marginRight: '320px' }
+  }
+  return {}
+})
+
+// TOC 宽度拖拽
+const tocWidth = ref(224)
+const MIN_TOC_WIDTH = 150
+const MAX_TOC_WIDTH_RATIO = 0.4
+
+function onTocResizeStart(e: MouseEvent) {
+  const startX = e.clientX
+  const startWidth = tocWidth.value
+  const contentArea = contentAreaRef.value
+  const maxWidth = contentArea ? contentArea.clientWidth * MAX_TOC_WIDTH_RATIO : 500
+
+  function onMove(ev: MouseEvent) {
+    const delta = startX - ev.clientX
+    tocWidth.value = Math.max(MIN_TOC_WIDTH, Math.min(maxWidth, startWidth + delta))
+  }
+  function onUp() {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
 const pageSettings = ref<PageSettings>({
   adaptiveWidth: false,
   smallFont: false,
@@ -477,6 +520,48 @@ async function onBlockMove(idx: number, delta: number) {
   if (newIdx < 0 || newIdx >= page.value.blocks.length) return
   const ids = page.value.blocks.map(b => b.id)
   const temp = ids[idx]; ids[idx] = ids[newIdx]; ids[newIdx] = temp
+  await pageStore.reorderBlocks(page.value.id, ids)
+}
+
+/** Enter 键：在当前 Block 下方插入新段落并聚焦 */
+async function onCreateBelow(idx: number) {
+  if (!page.value) return
+  // 在当前 block 之后插入一个新的空 paragraph block
+  const newBlock = await pageStore.insertBlockAt(page.value.id, idx + 1, 'paragraph', { text: '' })
+  // 同步排序到后端
+  const ids = page.value.blocks.map(b => b.id)
+  await pageStore.reorderBlocks(page.value.id, ids)
+  // 等待 DOM 更新后聚焦到新 block
+  await nextTick()
+  const el = contentAreaRef.value?.querySelector(`[data-block-id="${newBlock.id}"] textarea, [data-block-id="${newBlock.id}"] input`)
+  if (el instanceof HTMLElement) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.focus()
+  }
+}
+
+/** 悬停 + 按钮：在指定位置插入新段落 */
+async function onInsertAt(idx: number) {
+  if (!page.value) return
+  const insertIdx = Math.max(0, Math.min(idx, page.value.blocks.length))
+  const newBlock = await pageStore.insertBlockAt(page.value.id, insertIdx, 'paragraph', { text: '' })
+  const ids = page.value.blocks.map(b => b.id)
+  await pageStore.reorderBlocks(page.value.id, ids)
+  await nextTick()
+  const el = contentAreaRef.value?.querySelector(`[data-block-id="${newBlock.id}"] textarea, [data-block-id="${newBlock.id}"] input`)
+  if (el instanceof HTMLElement) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.focus()
+  }
+}
+
+/** 拖拽排序：将当前 block 移动到 targetIndex */
+async function onMoveTo(fromIdx: number, toIdx: number) {
+  if (!page.value || fromIdx === toIdx) return
+  const ids = page.value.blocks.map(b => b.id)
+  const moved = ids.splice(fromIdx, 1)[0]
+  const adjustedTo = fromIdx < toIdx ? toIdx - 1 : toIdx
+  ids.splice(adjustedTo, 0, moved)
   await pageStore.reorderBlocks(page.value.id, ids)
 }
 </script>
