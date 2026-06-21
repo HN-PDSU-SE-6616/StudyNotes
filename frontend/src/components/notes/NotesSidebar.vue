@@ -149,11 +149,20 @@
         </div>
       </div>
     </Teleport>
+    <!-- 导入加载中遮罩 -->
+    <Teleport to="body">
+      <div v-if="importing" class="fixed inset-0 z-50 flex items-center justify-center bg-black/20">
+        <div class="bg-white rounded-2xl px-8 py-6 shadow-xl flex items-center gap-3">
+          <div class="w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+          <span class="text-sm text-slate-600">正在导入，请稍候...</span>
+        </div>
+      </div>
+    </Teleport>
   </aside>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { usePageStore } from '@/stores/page'
@@ -174,6 +183,7 @@ const dirInput = ref<HTMLInputElement>()
 const fileInput = ref<HTMLInputElement>()
 const importDialogOpen = ref(false)
 const importParentId = ref<number>(0)
+const importing = ref(false)
 
 function triggerImport(pageId: number) {
   importParentId.value = pageId
@@ -217,7 +227,17 @@ async function uploadImportFiles(fileList: FileList) {
     const path = (f as any).webkitRelativePath || f.name
     formData.append('files', f, path)
   }
-  await pageStore.importPages(formData)
+  importing.value = true
+  try {
+    const data = await pageStore.importPages(formData)
+    // 等待 Vue 完成响应式更新后再切换页面
+    await nextTick()
+    if (data && data.length > 0 && data[0].id) {
+      emit('select', data[0].id)
+    }
+  } finally {
+    importing.value = false
+  }
 }
 
 // 扁平化所有页面（用于移动到/嵌入到子菜单）
@@ -252,6 +272,13 @@ async function handleAction(type: string, payload?: Record<string, unknown>) {
       break
     case 'move':
       await pageStore.movePage(payload.pageId as number, payload.parentId as number | null)
+      break
+    case 'reorder':
+      await pageStore.reorderPages(
+        payload.pageId as number,
+        payload.targetId as number,
+        (payload.position as 'above' | 'below') || 'below',
+      )
       break
     case 'embed':
       // 嵌入到：在该页面的 blocks 末尾添加一个 page_link block

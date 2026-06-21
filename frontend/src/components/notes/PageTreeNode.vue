@@ -2,9 +2,15 @@
   <div>
     <div
       class="flex items-center gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer text-sm transition-all group"
-      :class="isActive ? 'bg-brand-50 text-brand-700' : 'hover:bg-slate-100 text-slate-700'"
+      :class="[isActive ? 'bg-brand-50 text-brand-700 font-semibold border-l-[3px] border-brand-500 -ml-[3px]' : 'hover:bg-slate-100 text-slate-700 border-l-[3px] border-transparent -ml-[3px]', dragOverClass]"
       :style="{ paddingLeft: `${depth * 12 + 8}px` }"
+      draggable="true"
       @click="handleClick"
+      @dragstart="onDragStart"
+      @dragend="onDragEnd"
+      @dragover.prevent="onDragOver"
+      @dragleave="onDragLeave"
+      @drop.prevent="onDrop"
     >
       <button
         v-if="hasChildren"
@@ -198,7 +204,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import type { PageTreeNode as TreeNode } from '@/types'
 
 const props = defineProps<{
@@ -214,7 +220,30 @@ const emit = defineEmits<{
   action: [type: string, payload?: Record<string, unknown>]
 }>()
 
+// 当 activeId 变化或初始化时，自动展开包含 active 页面的路径
 const expanded = ref(true)
+
+// 检查当前节点的后代中是否包含 active 页面
+function hasActiveInDescendants(): boolean {
+  if (!props.activeId) return false
+  function check(nodes: TreeNode[] | undefined): boolean {
+    if (!nodes) return false
+    for (const n of nodes) {
+      if (n.id === props.activeId) return true
+      if (check(n.children)) return true
+      if (check(n.linked_children)) return true
+    }
+    return false
+  }
+  return check(props.node.children) || check(props.node.linked_children)
+}
+
+// 如果后代中包含 active 页面，保持展开
+watch(() => props.activeId, () => {
+  if (hasActiveInDescendants() || props.activeId === props.node.id) {
+    expanded.value = true
+  }
+}, { immediate: true })
 const depth = computed(() => props.depth ?? 0)
 const isActive = computed(() => props.activeId === props.node.id)
 const hasChildren = computed(
@@ -237,6 +266,26 @@ function toggleMenu(e: MouseEvent) {
     left: `${Math.min(rect.left, window.innerWidth - 240)}px`,
   }
   menuOpen.value = true
+  // 等待 Teleport 渲染后微调视口方向
+  nextTick(() => {
+    if (!menuRef.value) return
+    const popupRect = menuRef.value.getBoundingClientRect()
+    let newTop: string | undefined
+    let newLeft: string | undefined
+    if (popupRect.bottom > window.innerHeight - 8) {
+      newTop = `${Math.max(4, rect.top - popupRect.height - 4)}px`
+    }
+    if (popupRect.right > window.innerWidth - 8) {
+      newLeft = `${Math.max(4, window.innerWidth - popupRect.width - 8)}px`
+    }
+    if (newTop || newLeft) {
+      menuStyle.value = {
+        ...menuStyle.value,
+        ...(newTop ? { top: newTop } : {}),
+        ...(newLeft ? { left: newLeft } : {}),
+      }
+    }
+  })
 }
 function closeMenu() {
   menuOpen.value = false
@@ -253,6 +302,70 @@ const siblingPages = computed(() => {
   if (!props.allPages) return []
   return props.allPages.filter(p => p.id !== props.node.id)
 })
+
+// ===== 拖拽排序与嵌入 =====
+const isDragging = ref(false)
+const dragOverState = ref<'above' | 'below' | 'inside' | null>(null)
+
+const dragOverClass = computed(() => {
+  if (isDragging.value) return 'opacity-30'
+  if (dragOverState.value === 'above') return 'border-t-2 border-brand-400'
+  if (dragOverState.value === 'below') return 'border-b-2 border-brand-400'
+  if (dragOverState.value === 'inside') return 'bg-brand-100 ring-2 ring-brand-300'
+  return ''
+})
+
+function onDragStart(e: DragEvent) {
+  if (!e.dataTransfer) return
+  isDragging.value = true
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('application/page-id', String(props.node.id))
+}
+
+function onDragEnd() {
+  isDragging.value = false
+  dragOverState.value = null
+}
+
+function onDragOver(e: DragEvent) {
+  if (!e.dataTransfer) return
+  const myId = String(props.node.id)
+  const sourceId = e.dataTransfer.getData('application/page-id')
+  if (!sourceId || sourceId === myId) return
+  e.dataTransfer.dropEffect = 'move'
+
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const y = e.clientY
+  const topZone = rect.top + rect.height * 0.25
+  const bottomZone = rect.top + rect.height * 0.75
+
+  if (y < topZone) {
+    dragOverState.value = 'above'
+  } else if (y > bottomZone) {
+    dragOverState.value = 'below'
+  } else {
+    dragOverState.value = 'inside'
+  }
+}
+
+function onDragLeave() {
+  dragOverState.value = null
+}
+
+function onDrop(e: DragEvent) {
+  const sourceId = e.dataTransfer?.getData('application/page-id')
+  const position = dragOverState.value || 'below'
+  dragOverState.value = null
+  if (!sourceId || sourceId === String(props.node.id)) return
+
+  if (position === 'inside') {
+    // 拖入作为子页面：修改 source 的 parent_id 为目标页面 id
+    emit('action', 'move', { pageId: Number(sourceId), parentId: props.node.id })
+  } else {
+    // 同级排序：通过 sort_order 调整
+    emit('action', 'reorder', { pageId: Number(sourceId), targetId: props.node.id, position })
+  }
+}
 
 // 重命名状态
 const isRenaming = ref(false)

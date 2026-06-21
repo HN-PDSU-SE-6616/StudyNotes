@@ -116,7 +116,7 @@
             @create-below="onCreateBelow(idx)"
             @insert-above="onInsertAt(idx)"
             @insert-below="onInsertAt(idx + 1)"
-            @move-to="(targetIdx) => onMoveTo(idx, targetIdx)"
+            @move-to="(srcIdx, tgtIdx, pos) => onMoveTo(srcIdx, tgtIdx, pos)"
           />
 
           <!-- 添加 Block 按钮 -->
@@ -131,7 +131,7 @@
             </button>
             <Teleport to="body">
               <div v-if="showAddBlock" class="fixed inset-0 z-40" @click="showAddBlock = false" />
-              <div v-if="showAddBlock" class="fixed z-50 w-64 bg-white rounded-xl shadow-lg border border-slate-200 py-1" :style="addBlockStyle" @click.stop>
+              <div v-if="showAddBlock" ref="addBlockPopup" class="fixed z-50 w-64 bg-white rounded-xl shadow-lg border border-slate-200 py-1" :style="addBlockStyle" @click.stop>
                 <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">基础块</div>
                 <button v-for="bt in baseBlocks" :key="bt.type" class="block-menu-item" @click="addBlock(bt.type, bt.default)">
                   <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg">{{ bt.icon }}</span>
@@ -447,6 +447,7 @@ async function onTitleChange(e: Event) {
 const showAddBlock = ref(false)
 const addBlockRef = ref<HTMLElement>()
 const addBlockStyle = ref<Record<string, string>>({})
+const addBlockPopup = ref<HTMLElement>()
 
 const baseBlocks = [
   { type: 'paragraph', label: '段落', icon: '¶', shortcut: '输入文本', default: { text: '' } },
@@ -476,7 +477,33 @@ function toggleAddBlock(e: MouseEvent) {
 watch(showAddBlock, (v) => {
   if (v && addBlockRef.value) {
     const rect = addBlockRef.value.getBoundingClientRect()
-    addBlockStyle.value = { top: `${Math.max(rect.top - 300, 60)}px`, left: `${rect.left}px` }
+    const vw = window.innerWidth
+    const estimatedHeight = 430
+    let top = rect.top - estimatedHeight
+    if (top < 60) top = rect.bottom + 4
+    let left = rect.left
+    if (left + 256 > vw - 8) left = Math.max(4, vw - 256 - 8)
+    addBlockStyle.value = { top: `${Math.max(4, top)}px`, left: `${left}px` }
+    nextTick(() => {
+      const popup = addBlockPopup.value
+      if (!popup) return
+      const popupRect = popup.getBoundingClientRect()
+      let newTop: string | undefined
+      let newLeft: string | undefined
+      if (popupRect.bottom > window.innerHeight - 8) {
+        newTop = `${Math.max(4, rect.top - popupRect.height - 4)}px`
+      }
+      if (popupRect.right > window.innerWidth - 8) {
+        newLeft = `${Math.max(4, window.innerWidth - popupRect.width - 8)}px`
+      }
+      if (newTop || newLeft) {
+        addBlockStyle.value = {
+          ...addBlockStyle.value,
+          ...(newTop ? { top: newTop } : {}),
+          ...(newLeft ? { left: newLeft } : {}),
+        }
+      }
+    })
   }
 })
 
@@ -555,13 +582,24 @@ async function onInsertAt(idx: number) {
   }
 }
 
-/** 拖拽排序：将当前 block 移动到 targetIndex */
-async function onMoveTo(fromIdx: number, toIdx: number) {
+/** 拖拽排序：将源 block 移动到目标 block 的上方或下方 */
+async function onMoveTo(fromIdx: number, toIdx: number, position: 'above' | 'below' = 'below') {
   if (!page.value || fromIdx === toIdx) return
   const ids = page.value.blocks.map(b => b.id)
   const moved = ids.splice(fromIdx, 1)[0]
-  const adjustedTo = fromIdx < toIdx ? toIdx - 1 : toIdx
-  ids.splice(adjustedTo, 0, moved)
+  // position='above': 插入到目标上方
+  //   若 fromIdx < toIdx: 删除 fromIdx 后 toIdx 左移一位，应插入到 toIdx-1
+  //   若 fromIdx > toIdx: 删除不影响 toIdx 位置，插入到 toIdx
+  // position='below': 插入到目标下方
+  //   若 fromIdx < toIdx: 删除 fromIdx 后 toIdx 左移一位，此时 toIdx 就是原目标的旧位置，插入到 toIdx 即可
+  //   若 fromIdx > toIdx: 删除 fromIdx 后 toIdx 不变，插入到 toIdx+1
+  let insertAt: number
+  if (position === 'below') {
+    insertAt = fromIdx < toIdx ? toIdx : toIdx + 1
+  } else {
+    insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx
+  }
+  ids.splice(insertAt, 0, moved)
   await pageStore.reorderBlocks(page.value.id, ids)
 }
 </script>

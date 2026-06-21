@@ -87,7 +87,63 @@ export const usePageStore = defineStore('page', () => {
   }
 
   async function movePage(pageId: number, parentId: number | null) {
-    return await updatePage(pageId, { parent_id: parentId })
+    await pagesApi.update(pageId, { parent_id: parentId })
+    // 页面移动后同步引用该页面的 page_link 块
+    await pagesApi.syncLinkBlocks(pageId)
+    await fetchTree()
+  }
+
+  /** 同级页面拖拽排序：将 source 插入到 target 的上方或下方 */
+  async function reorderPages(sourceId: number, targetId: number, position: 'above' | 'below') {
+    // 从树中查找两个页面节点
+    const allNodes: PageTreeNode[] = []
+    function walk(nodes: PageTreeNode[]) {
+      for (const n of nodes) {
+        allNodes.push(n)
+        if (n.children) walk(n.children)
+        if (n.linked_children) walk(n.linked_children)
+      }
+    }
+    walk(tree.value)
+
+    const source = allNodes.find(n => n.id === sourceId)
+    const target = allNodes.find(n => n.id === targetId)
+    if (!source || !target) return
+
+    // 获取 target 的所有同级节点，计算实际的 sort_order
+    const targetParent = target.parent_id ?? 0
+    const siblings = allNodes.filter(
+      n => (n.parent_id ?? 0) === targetParent && n.id !== sourceId
+    ).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+
+    const targetIdx = siblings.findIndex(n => n.id === targetId)
+    if (targetIdx < 0) return
+
+    let newOrder: number
+    if (position === 'above') {
+      // 插入到 target 之前
+      if (targetIdx === 0) {
+        newOrder = (target.sort_order ?? 0) - 1
+      } else {
+        const prevOrder = siblings[targetIdx - 1].sort_order ?? 0
+        const tgtOrder = target.sort_order ?? 0
+        newOrder = (prevOrder + tgtOrder) / 2
+      }
+    } else {
+      // 插入到 target 之后
+      if (targetIdx === siblings.length - 1) {
+        newOrder = (target.sort_order ?? 0) + 1
+      } else {
+        const tgtOrder = target.sort_order ?? 0
+        const nextOrder = siblings[targetIdx + 1].sort_order ?? 0
+        newOrder = (tgtOrder + nextOrder) / 2
+      }
+    }
+
+    // 直接调用 API（updatePage 内部会 fetchTree，这里避免重复调用）
+    await pagesApi.update(sourceId, { sort_order: newOrder })
+    await pagesApi.syncLinkBlocks(sourceId)
+    await fetchTree()
   }
 
   async function deletePage(pageId: number) {
@@ -198,6 +254,7 @@ export const usePageStore = defineStore('page', () => {
     updatePage,
     renamePage,
     movePage,
+    reorderPages,
     deletePage,
     duplicatePage,
     addBlock,

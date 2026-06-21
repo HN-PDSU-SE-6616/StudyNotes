@@ -20,6 +20,8 @@ export const pagesApi = {
 
   duplicate: (pageId: number) => api.post(`/pages/${pageId}/duplicate`),
 
+  syncLinkBlocks: (pageId: number) => api.post(`/pages/${pageId}/sync-link-blocks`),
+
   search: (q: string) => api.get('/pages/search', { params: { q } }),
 }
 

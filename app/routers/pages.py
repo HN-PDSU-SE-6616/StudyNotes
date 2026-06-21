@@ -176,6 +176,12 @@ async def update_page(
     session.add(page)
     await session.commit()
     await session.refresh(page)
+
+    # 如果排序或父级发生了变化，同步引用该页面的 page_link 块
+    if 'sort_order' in body.model_dump(exclude_unset=True) or 'parent_id' in body.model_dump(exclude_unset=True):
+        from app.services.page_service import sync_page_link_blocks_order
+        await sync_page_link_blocks_order(session, page_id)
+
     return PageRead.model_validate(page)
 
 
@@ -247,6 +253,23 @@ async def get_page_stats(
     )
 
 
+@router.post("/{page_id}/sync-link-blocks", summary="同步页面引用块")
+async def sync_page_link_blocks(
+    page_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """同步所有引用该页面的 page_link 块的排序位置和标题"""
+    workspace = await get_user_workspace(session, current_user.id)
+    page = await session.get(Page, page_id)
+    if not page or page.workspace_id != workspace.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="页面不存在")
+
+    from app.services.page_service import sync_page_link_blocks_order
+    await sync_page_link_blocks_order(session, page_id)
+    return {"message": "同步完成", "page_id": page_id}
+
+
 @router.delete("/{page_id}", summary="删除页面")
 async def delete_page(
     page_id: int,
@@ -263,6 +286,7 @@ async def delete_page(
         await session.delete(block)
 
     from app.models.page import PageLink
+    from app.services.page_service import sync_page_link_blocks_order
 
     links = (
         await session.execute(
@@ -276,6 +300,10 @@ async def delete_page(
 
     await session.delete(page)
     await session.commit()
+
+    # 同步所有引用该页面的 page_link 块
+    await sync_page_link_blocks_order(session, page_id)
+
     return {"message": "页面已删除"}
 
 
@@ -539,7 +567,7 @@ def _strip_md_toc(md_text: str) -> str:
 
 
 def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Block]:
-    """简易 Markdown 解析为 Block 列表"""
+    """简易 Markdown 解析为 Block 列表，支持表格解析"""
     # 预处理：移除目录
     md_text = _strip_md_toc(md_text)
 
@@ -549,6 +577,10 @@ def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Bl
     code_buffer: list[str] = []
     code_lang = ''
     in_code = False
+
+    # 表格解析正则：匹配 | cell | cell | 格式的行
+    _TABLE_ROW_RE = re.compile(r'^\s*\|(.+)\|\s*$')
+    _TABLE_SEP_RE = re.compile(r'^\s*\|[\s:-]+\|[\s|:-]+$')
 
     def flush_code():
         nonlocal order
@@ -561,8 +593,44 @@ def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Bl
             order += 1
             code_buffer.clear()
 
-    for line in lines:
+    def parse_table_cells(stripped_line: str) -> list[str]:
+        """解析表格行中的单元格列表，并对每个单元格处理 Markdown 转义字符"""
+        m = _TABLE_ROW_RE.match(stripped_line)
+        if not m:
+            return []
+        return [unescape_md_table_cell(cell.strip()) for cell in m.group(1).split('|')]
+
+    def unescape_md_table_cell(cell: str) -> str:
+        """处理 Markdown 表格单元格中的反斜杠转义序列
+        
+        Markdown 表格中常用转义：
+        - \| → |  （管道符）
+        - \* → *  （星号）
+        - \_ → _  （下划线）
+        - \\ → \  （反斜杠）
+        - \# → #  （井号）
+        - \- → -  （连字符，避免被当作分隔行）
+        - \` → `  （反引号）
+        - \~ → ~  （波浪号）
+        """
+        # 先处理双反斜杠 → 占位符，避免被后续替换干扰
+        cell = cell.replace('\\\\', '\x00')
+        cell = cell.replace('\\|', '|')
+        cell = cell.replace('\\*', '*')
+        cell = cell.replace('\\_', '_')
+        cell = cell.replace('\\#', '#')
+        cell = cell.replace('\\-', '-')
+        cell = cell.replace('\\`', '`')
+        cell = cell.replace('\\~', '~')
+        # 还原占位符为单个反斜杠
+        cell = cell.replace('\x00', '\\')
+        return cell
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         stripped = line.strip()
+
         if stripped.startswith('```'):
             if in_code:
                 flush_code()
@@ -571,12 +639,50 @@ def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Bl
             else:
                 code_lang = stripped[3:].strip()
                 in_code = True
+            i += 1
             continue
         if in_code:
             code_buffer.append(line)
+            i += 1
             continue
         if not stripped:
+            i += 1
             continue
+
+        # ---- 表格检测：至少两列的表头行，且下一行是分隔行 ----
+        header_cells = parse_table_cells(stripped)
+        if len(header_cells) >= 2 and i + 1 < len(lines):
+            next_stripped = lines[i + 1].strip()
+            if _TABLE_SEP_RE.match(next_stripped):
+                # 收集所有数据行
+                headers = header_cells
+                rows: list[list[str]] = []
+                i += 2  # 跳过表头和分隔行
+                while i < len(lines):
+                    row_stripped = lines[i].strip()
+                    if not row_stripped:
+                        # 空行：允许在表格中保留，收集后继续看下一行
+                        i += 1
+                        continue
+                    row_cells = parse_table_cells(row_stripped)
+                    if len(row_cells) >= 2:
+                        # 补齐列数到与表头一致
+                        while len(row_cells) < len(headers):
+                            row_cells.append('')
+                        rows.append(row_cells)
+                        i += 1
+                    else:
+                        # 不是表格行，结束表格收集
+                        break
+                # 创建表格块
+                blocks.append(Block(
+                    page_id=page_id, type='table',
+                    content={'headers': headers, 'rows': rows},
+                    sort_order=order,
+                ))
+                order += 1
+                continue
+
         # 图片：![alt](path)
         img_match = re.match(r'^!\[([^\]]*)\]\(([^)]+)\)$', stripped)
         if img_match:
@@ -586,6 +692,7 @@ def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Bl
                 sort_order=order,
             ))
             order += 1
+            i += 1
             continue
         h_match = re.match(r'^(#{1,6})\s+(.+)', stripped)
         if h_match:
@@ -595,6 +702,7 @@ def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Bl
                 sort_order=order,
             ))
             order += 1
+            i += 1
             continue
         if stripped.startswith('> '):
             blocks.append(Block(
@@ -603,6 +711,7 @@ def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Bl
                 sort_order=order,
             ))
             order += 1
+            i += 1
             continue
         if re.match(r'^[-*_]{3,}$', stripped):
             blocks.append(Block(
@@ -611,6 +720,7 @@ def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Bl
                 sort_order=order,
             ))
             order += 1
+            i += 1
             continue
         # 任务列表
         task_match = re.match(r'^-\s+\[([ x])\]\s+(.+)', stripped)
@@ -621,6 +731,7 @@ def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Bl
                 sort_order=order,
             ))
             order += 1
+            i += 1
             continue
         if re.match(r'^[-*+]\s', stripped):
             blocks.append(Block(
@@ -629,6 +740,7 @@ def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Bl
                 sort_order=order,
             ))
             order += 1
+            i += 1
             continue
         blocks.append(Block(
             page_id=page_id, type='paragraph',
@@ -636,6 +748,7 @@ def _parse_md_to_blocks(md_text: str, page_id: int, start_order: int) -> list[Bl
             sort_order=order,
         ))
         order += 1
+        i += 1
 
     flush_code()
     return blocks
@@ -648,7 +761,7 @@ def _parse_html_to_blocks_with_assets(
     html_text: str, page_id: int, start_order: int,
     file_map: dict[str, bytes], user_id: int,
 ) -> tuple[list[Block], str]:
-    """解析HTML为Block，同时处理静态资源上传，返回(blocks, 修复后的HTML)"""
+    """解析HTML为Block，同时处理静态资源上传，支持表格解析，返回(blocks, 修复后的HTML)"""
     from html.parser import HTMLParser
 
     blocks: list[Block] = []
@@ -681,56 +794,160 @@ def _parse_html_to_blocks_with_assets(
             self.current_type = 'paragraph'
             self.current_text = ''
             self.heading_level = 0
+            # 表格状态
+            self.in_table = False
+            self.in_thead = False
+            self.in_tbody = False
+            self.in_th = False
+            self.in_td = False
+            self.current_cell = ''
+            self.table_headers: list[str] = []
+            self.table_rows: list[list[str]] = []
+            self.current_row: list[str] = []
+            self.warnings: list[str] = []
 
         def handle_starttag(self, tag, attrs):
-            if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
-                self.heading_level = int(tag[1])
-            elif tag == 'blockquote':
-                self.current_type = 'quote'
-            elif tag in ('pre', 'code'):
-                self.current_type = 'code'
+            attrs_dict = dict(attrs)
+
+            # 表格相关标签
+            if tag == 'table':
+                self.in_table = True
+                self.table_headers = []
+                self.table_rows = []
+                self.current_row = []
+                return
+            if not self.in_table:
+                if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+                    self.heading_level = int(tag[1])
+                elif tag == 'blockquote':
+                    self.current_type = 'quote'
+                elif tag in ('pre', 'code'):
+                    self.current_type = 'code'
+                return
+
+            # 表格内部标签
+            if tag == 'thead':
+                self.in_thead = True
+            elif tag == 'tbody':
+                self.in_tbody = True
+            elif tag == 'tr':
+                self.current_row = []
+            elif tag in ('th', 'td'):
+                if tag == 'th':
+                    self.in_th = True
+                else:
+                    self.in_td = True
+                self.current_cell = ''
+                # 检查 colspan / rowspan
+                colspan = attrs_dict.get('colspan')
+                rowspan = attrs_dict.get('rowspan')
+                if colspan and int(colspan) > 1:
+                    self.warnings.append(f'cell with colspan={colspan} will be split')
+                if rowspan and int(rowspan) > 1:
+                    self.warnings.append(f'cell with rowspan={rowspan} may lose merge info')
 
         def handle_endtag(self, tag):
             nonlocal order
-            if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
-                if self.current_text.strip():
+
+            if tag == 'table':
+                self.in_table = False
+                self.in_thead = False
+                self.in_tbody = False
+                # 如果只有 thead 没有 tbody，当前行可能还在
+                self._flush_current_row()
+                # 创建表格块
+                headers = self.table_headers if self.table_headers else []
+                rows = self.table_rows
+                # 如果有 warnings，在表格块前插入一个 callout 提示
+                if self.warnings:
                     blocks.append(Block(
-                        page_id=page_id, type='heading',
-                        content={'level': self.heading_level, 'text': self.current_text.strip()},
+                        page_id=page_id, type='callout',
+                        content={'type': 'warning', 'text': '表格导入警告：' + '; '.join(self.warnings)},
                         sort_order=order,
                     ))
                     order += 1
-                self.heading_level = 0
-                self.current_text = ''
-            elif tag == 'blockquote':
-                if self.current_text.strip():
+                    self.warnings.clear()
+                if headers or rows:
                     blocks.append(Block(
-                        page_id=page_id, type='quote',
-                        content={'text': self.current_text.strip()},
+                        page_id=page_id, type='table',
+                        content={'headers': headers, 'rows': rows},
                         sort_order=order,
                     ))
                     order += 1
-                self.current_text = ''
-                self.current_type = 'paragraph'
-            elif tag in ('p', 'li', 'div', 'br'):
-                if self.current_text.strip() or tag == 'br':
+                return
+
+            if not self.in_table:
+                if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+                    if self.current_text.strip():
+                        blocks.append(Block(
+                            page_id=page_id, type='heading',
+                            content={'level': self.heading_level, 'text': self.current_text.strip()},
+                            sort_order=order,
+                        ))
+                        order += 1
+                    self.heading_level = 0
+                    self.current_text = ''
+                elif tag == 'blockquote':
+                    if self.current_text.strip():
+                        blocks.append(Block(
+                            page_id=page_id, type='quote',
+                            content={'text': self.current_text.strip()},
+                            sort_order=order,
+                        ))
+                        order += 1
+                    self.current_text = ''
+                    self.current_type = 'paragraph'
+                elif tag in ('p', 'li', 'div', 'br'):
+                    if self.current_text.strip() or tag == 'br':
+                        blocks.append(Block(
+                            page_id=page_id, type='paragraph',
+                            content={'text': self.current_text.strip()},
+                            sort_order=order,
+                        ))
+                        order += 1
+                    self.current_text = ''
+                elif tag in ('hr',):
                     blocks.append(Block(
-                        page_id=page_id, type='paragraph',
-                        content={'text': self.current_text.strip()},
+                        page_id=page_id, type='divider',
+                        content={},
                         sort_order=order,
                     ))
                     order += 1
-                self.current_text = ''
-            elif tag in ('hr',):
-                blocks.append(Block(
-                    page_id=page_id, type='divider',
-                    content={},
-                    sort_order=order,
-                ))
-                order += 1
+                return
+
+            # 表格内部结束标签
+            if tag == 'thead':
+                self.in_thead = False
+            elif tag == 'tbody':
+                self.in_tbody = False
+            elif tag == 'tr':
+                self._flush_current_row()
+            elif tag == 'th':
+                self.in_th = False
+                self.current_row.append(self.current_cell.strip())
+            elif tag == 'td':
+                self.in_td = False
+                self.current_row.append(self.current_cell.strip())
+
+        def _flush_current_row(self):
+            if not self.current_row:
+                return
+            if self.in_thead:
+                # 将 thead 中的行收集为 headers（可能多行thead，取第一行）
+                if not self.table_headers:
+                    self.table_headers = list(self.current_row)
+                else:
+                    # 额外的 thead 行作为数据行
+                    self.table_rows.append(list(self.current_row))
+            else:
+                self.table_rows.append(list(self.current_row))
+            self.current_row = []
 
         def handle_data(self, data):
-            self.current_text += data
+            if self.in_th or self.in_td:
+                self.current_cell += data
+            else:
+                self.current_text += data
 
     parser = SimpleParser()
     try:
@@ -1148,6 +1365,28 @@ async def _fix_page_links(
                     new_items.append(item)
             if items_changed:
                 content['items'] = new_items
+                changed = True
+
+        # 处理 table 块的 rows 中的 MD 链接
+        if block.type == 'table' and 'rows' in content and isinstance(content['rows'], list):
+            new_rows = []
+            rows_changed = False
+            for row in content['rows']:
+                if isinstance(row, list):
+                    new_row = []
+                    for cell in row:
+                        if isinstance(cell, str):
+                            new_cell = MD_LINK_RE.sub(_replace_link, cell)
+                            if new_cell != cell:
+                                rows_changed = True
+                            new_row.append(new_cell)
+                        else:
+                            new_row.append(cell)
+                    new_rows.append(new_row)
+                else:
+                    new_rows.append(row)
+            if rows_changed:
+                content['rows'] = new_rows
                 changed = True
 
         if changed:

@@ -51,7 +51,7 @@
       <!-- Block 操作下拉菜单 -->
       <Teleport to="body">
         <div v-if="blockMenuOpen" class="fixed inset-0 z-40" @click="blockMenuOpen = false" />
-        <div v-if="blockMenuOpen" class="fixed z-50 w-52 bg-white rounded-xl shadow-lg border border-slate-200 py-1" :style="blockMenuStyle" @click.stop>
+        <div v-if="blockMenuOpen" ref="blockMenuPopup" class="fixed z-50 w-52 bg-white rounded-xl shadow-lg border border-slate-200 py-1" :style="blockMenuStyle" @click.stop>
           <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">转换类型</div>
           <button v-for="bt in typeOptions" :key="bt.type" class="block-menu-item" @click="changeType(bt.type)">
             <span>{{ bt.icon }}</span><span>{{ bt.label }}</span>
@@ -87,7 +87,7 @@
       <!-- 右键菜单 -->
       <Teleport to="body">
         <div v-if="ctxMenuOpen" class="fixed inset-0 z-40" @click="ctxMenuOpen = false" />
-        <div v-if="ctxMenuOpen" class="fixed z-50 w-52 bg-white rounded-xl shadow-lg border border-slate-200 py-1" :style="ctxMenuStyle" @click.stop>
+        <div v-if="ctxMenuOpen" ref="ctxMenuPopup" class="fixed z-50 w-52 bg-white rounded-xl shadow-lg border border-slate-200 py-1" :style="ctxMenuStyle" @click.stop>
           <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">转换为</div>
           <button class="block-menu-item" @click="quickConvert('heading', 1)"><span class="text-xs font-mono text-slate-400 w-5">H1</span> # 一级标题</button>
           <button class="block-menu-item" @click="quickConvert('heading', 2)"><span class="text-xs font-mono text-slate-400 w-5">H2</span> ## 二级标题</button>
@@ -121,11 +121,11 @@
           ref="inputRef"
           v-model="editText"
           class="w-full resize-none bg-transparent border-none outline-none text-slate-700 leading-relaxed"
-          rows="1"
           @blur="saveEdit"
           @keydown.enter.exact="$event.preventDefault(); onEnterInEdit()"
           @keydown.escape="cancelEdit"
           @keydown="onEditKeydown"
+          @paste="onPaste"
           @input="autoResize"
         />
       </div>
@@ -166,36 +166,55 @@
             :class="{ 'opacity-50': !code }"
           ><code v-if="code" class="hljs-code-block" v-html="highlightedCode" /><code v-else class="text-slate-400">点击编辑代码...</code></pre>
         </div>
-        <div v-else class="bg-slate-900 rounded-xl overflow-hidden">
+        <div v-else class="bg-slate-900 rounded-xl">
           <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-700 relative">
-            <!-- 语言下拉选择器 -->
-            <div class="relative" @click.stop>
+            <!-- 语言下拉选择器（Typora 风格：独立选项框，mousedown.prevent 防止 textarea blur） -->
+            <div class="relative">
               <button
+                data-code-lang-btn
                 class="flex items-center gap-1 text-[10px] font-mono text-slate-400 uppercase hover:text-slate-200 transition-colors px-1.5 py-0.5 rounded hover:bg-slate-800"
+                @mousedown.prevent
                 @click="showLangDropdown = !showLangDropdown"
               >
                 {{ editLanguage || 'text' }}
                 <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M19 9l-7 7-7-7" /></svg>
               </button>
-              <!-- 下拉面板 -->
-              <div v-if="showLangDropdown" class="absolute top-full left-0 mt-1 w-44 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-30 py-1 max-h-48 overflow-y-auto">
-                <input
-                  v-model="langSearchText"
-                  class="w-full bg-slate-700 text-slate-200 text-[11px] px-2 py-1.5 outline-none border-b border-slate-600"
-                  placeholder="搜索语言..."
-                  @keydown.escape="showLangDropdown = false"
-                />
-                <button
-                  v-for="opt in filteredLangOptions"
-                  :key="opt.value"
-                  class="w-full flex items-center justify-between px-3 py-1.5 text-[11px] transition-colors text-left"
-                  :class="editLanguage === opt.value ? 'text-brand-400 bg-brand-500/10' : 'text-slate-300 hover:bg-slate-700'"
-                  @click="selectLanguage(opt.value)"
+              <!-- 下拉面板：mousedown.prevent 阻止 blur，内部 click 正常触发 -->
+              <Teleport to="body">
+                <div v-if="showLangDropdown" class="fixed inset-0 z-40" @click="showLangDropdown = false" />
+                <div
+                  v-if="showLangDropdown"
+                  ref="langDropdownPanel"
+                  class="fixed z-50 w-56 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl py-1 overflow-hidden"
+                  :style="langDropdownStyle"
+                  @click.stop
+                  @mousedown.prevent
                 >
-                  <span class="font-mono">{{ opt.label }}</span>
-                  <svg v-if="editLanguage === opt.value" class="w-3 h-3 text-brand-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" /></svg>
-                </button>
-              </div>
+                  <div class="px-2 pt-1 pb-1.5 border-b border-slate-600">
+                    <input
+                      ref="langSearchInput"
+                      v-model="langSearchText"
+                      class="w-full bg-slate-700 text-slate-100 text-[12px] px-2 py-1.5 rounded outline-none placeholder-slate-500"
+                      placeholder="搜索语言..."
+                      @keydown.escape="showLangDropdown = false; nextTick(() => inputRef?.focus())"
+                      @keydown.enter.prevent="selectFirstFilteredLang"
+                    />
+                  </div>
+                  <div class="max-h-52 overflow-y-auto py-1">
+                    <button
+                      v-for="opt in filteredLangOptions"
+                      :key="opt.value"
+                      class="w-full flex items-center justify-between px-3 py-1.5 text-[12px] transition-colors text-left"
+                      :class="editLanguage === opt.value ? 'text-brand-400 bg-brand-500/10' : 'text-slate-300 hover:bg-slate-700'"
+                      @click="selectLanguage(opt.value)"
+                    >
+                      <span class="font-mono">{{ opt.label }}</span>
+                      <svg v-if="editLanguage === opt.value" class="w-3.5 h-3.5 text-brand-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" /></svg>
+                    </button>
+                    <div v-if="filteredLangOptions.length === 0" class="px-3 py-3 text-[11px] text-slate-500 text-center">无匹配语言</div>
+                  </div>
+                </div>
+              </Teleport>
             </div>
             <div class="flex-1" />
             <button class="text-[10px] text-slate-400 hover:text-slate-200" @click="copyCode">复制</button>
@@ -203,9 +222,13 @@
           <textarea
             ref="inputRef"
             v-model="editText"
-            class="w-full resize-none bg-transparent text-slate-100 p-4 text-sm font-mono outline-none min-h-[120px]"
+            class="w-full resize-none bg-transparent text-slate-100 p-4 text-sm font-mono outline-none"
+            style="min-height: 3em"
             placeholder="输入代码..."
             @keydown.escape="cancelEdit"
+            @keydown="onEditKeydown"
+            @input="autoResize"
+            @paste="onPaste"
             @blur="saveCodeEdit"
           />
         </div>
@@ -227,6 +250,8 @@
           @keydown.enter.exact="$event.preventDefault(); onEnterInEdit()"
           @keydown.escape="cancelEdit"
           @keydown="onEditKeydown"
+          @input="autoResize"
+          @paste="onPaste"
         />
       </blockquote>
 
@@ -264,11 +289,12 @@
             ref="inputRef"
             v-model="editText"
             class="flex-1 resize-none bg-transparent border-none outline-none text-slate-700 leading-relaxed"
-            rows="1"
             @blur="saveListEdit"
             @keydown.enter.exact.prevent="onEnterInEditList"
             @keydown.escape="cancelEdit"
             @keydown="onEditKeydown"
+            @input="autoResize"
+            @paste="onPaste"
           />
         </div>
       </div>
@@ -318,27 +344,73 @@
           @blur="saveEdit"
           @keydown.escape="cancelEdit"
           @keydown="onEditKeydown"
+          @input="autoResize"
+          @paste="onPaste"
         />
       </div>
 
       <!-- 表格 -->
-      <div v-else-if="block.type === 'table'" class="my-2 overflow-x-auto">
-        <table class="w-full border-collapse text-sm" @click="startEdit">
-          <thead v-if="tableData.headers.length">
-            <tr class="bg-slate-50">
-              <th v-for="(h, hi) in tableData.headers" :key="hi" class="border border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">
-                <span v-html="renderInlineMarkdown(h)" />
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(row, ri) in tableData.rows" :key="ri" class="hover:bg-slate-50/50">
-              <td v-for="(cell, ci) in row" :key="ci" class="border border-slate-200 px-3 py-2 text-slate-700" v-html="renderInlineMarkdown(cell)" />
-            </tr>
-          </tbody>
-        </table>
-        <div v-if="!tableData.headers.length" class="px-4 py-3 bg-slate-50 rounded-xl text-sm text-slate-400 text-center cursor-pointer" @click="startEdit">
-          📊 点击编辑表格（格式：| 列1 | 列2 |）
+      <div v-else-if="block.type === 'table'" class="my-2">
+        <!-- 非编辑模式：显示渲染后的表格 -->
+        <div v-if="!editing" class="overflow-x-auto border border-slate-200 rounded-xl" @click="startEdit">
+          <table v-if="tableData.headers.length" class="w-full border-collapse text-sm min-w-[400px]">
+            <thead>
+              <tr class="bg-slate-50">
+                <th v-for="(h, hi) in tableData.headers" :key="hi" class="border border-slate-200 px-3 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">
+                  <span v-html="renderInlineMarkdown(h)" />
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, ri) in tableData.rows" :key="ri" class="hover:bg-slate-50/50">
+                <td v-for="(cell, ci) in row" :key="ci" class="border border-slate-200 px-3 py-2 text-slate-700" v-html="renderInlineMarkdown(cell)" />
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="!tableData.headers.length" class="px-4 py-3 text-sm text-slate-400 text-center cursor-pointer">
+            📊 点击编辑表格（格式：| 列1 | 列2 |）
+          </div>
+        </div>
+        <!-- 编辑模式：可编辑表格 -->
+        <div v-else class="overflow-x-auto border-2 border-brand-300 rounded-xl">
+          <div class="flex items-center gap-1 px-2 py-1.5 bg-brand-50 border-b border-brand-200">
+            <span class="text-xs text-brand-600 font-semibold">📊 表格编辑</span>
+            <div class="flex-1" />
+            <button class="px-2 py-0.5 text-xs rounded hover:bg-brand-200 text-brand-700 transition-colors" title="添加行" @click.stop="addTableRow">+ 行</button>
+            <button class="px-2 py-0.5 text-xs rounded hover:bg-brand-200 text-brand-700 transition-colors" title="添加列" @click.stop="addTableCol">+ 列</button>
+            <button class="px-2 py-0.5 text-xs rounded hover:bg-red-100 text-red-600 transition-colors" title="删除行" @click.stop="deleteTableRow">- 行</button>
+            <button class="px-2 py-0.5 text-xs rounded hover:bg-red-100 text-red-600 transition-colors" title="删除列" @click.stop="deleteTableCol">- 列</button>
+            <div class="w-px h-4 bg-brand-200 mx-1" />
+            <button class="px-2 py-0.5 text-xs rounded bg-brand-500 text-white hover:bg-brand-600 transition-colors" @click.stop="saveTableEdit">完成</button>
+          </div>
+          <table class="w-full border-collapse text-sm min-w-[400px]">
+            <thead>
+              <tr class="bg-slate-50/80">
+                <th v-for="(h, hi) in editTableHeaders" :key="hi" class="border border-slate-200 px-2 py-1">
+                  <input
+                    v-model="editTableHeaders[hi]"
+                    class="w-full bg-transparent border-none outline-none text-slate-700 font-semibold text-left py-1"
+                    placeholder="表头..."
+                    @keydown.enter.prevent="onTableEnter($event, 'header', hi)"
+                    @keydown.escape="saveTableEdit"
+                  />
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, ri) in editTableRows" :key="ri">
+                <td v-for="(cell, ci) in row" :key="ci" class="border border-slate-200 px-2 py-1">
+                  <input
+                    v-model="editTableRows[ri][ci]"
+                    class="w-full bg-transparent border-none outline-none text-slate-700 py-1"
+                    :placeholder="'单元格...'"
+                    @keydown.enter.prevent="onTableEnter($event, 'cell', ri, ci)"
+                    @keydown.escape="saveTableEdit"
+                  />
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -349,8 +421,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch } from 'vue'
-import type { Block, PageTreeNode } from '@/types'
+import { ref, computed, nextTick, onMounted, watch, type Ref } from 'vue'
+import type { Block, PageTreeNode, TableBlockContent } from '@/types'
 import hljs from 'highlight.js'
 import python from 'highlight.js/lib/languages/python'
 import bash from 'highlight.js/lib/languages/bash'
@@ -404,7 +476,7 @@ const emit = defineEmits<{
   createBelow: []
   insertAbove: []
   insertBelow: []
-  moveTo: [targetIndex: number]
+  moveTo: [sourceIndex: number, targetIndex: number, position: 'above' | 'below']
 }>()
 
 const showHandle = ref(false)
@@ -412,6 +484,10 @@ const editing = ref(false)
 const editText = ref('')
 const editLanguage = ref('')
 const inputRef = ref<HTMLInputElement | HTMLTextAreaElement | null>(null)
+
+// ===== 表格编辑状态 =====
+const editTableHeaders = ref<string[]>([])
+const editTableRows = ref<string[][]>([])
 
 // ===== 空 Block 双击 Backspace 删除 =====
 const backspacePressedOnce = ref(false)
@@ -452,11 +528,32 @@ function onDragLeave() {
 }
 
 function onDrop(e: DragEvent) {
+  // ⚠️ 必须在清空 dragOverPosition 之前读取 position，否则总是 'below'
+  const position = dragOverPosition.value || 'below'
   dragOverPosition.value = null
   const targetIndex = getBlockIndex()
-  if (targetIndex >= 0 && dragSourceIndex >= 0 && targetIndex !== dragSourceIndex) {
-    emit('moveTo', targetIndex)
+  if (targetIndex < 0) return
+
+  // 从 dataTransfer 中读取源 block ID（跨实例可靠传递）
+  const sourceId = e.dataTransfer?.getData('text/plain')
+  const sourceIndex = sourceId ? getBlockIndexById(sourceId) : dragSourceIndex
+
+  if (sourceIndex >= 0 && targetIndex !== sourceIndex) {
+    emit('moveTo', sourceIndex, targetIndex, position)
   }
+}
+
+/** 根据 block id 在 DOM 中查找索引 */
+function getBlockIndexById(blockId: string): number {
+  const el = document.querySelector(`[data-block-id="${blockId}"]`)
+  if (!el) return -1
+  const parent = el.parentElement
+  if (!parent) return -1
+  const items = parent.querySelectorAll('[data-block-id]')
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].getAttribute('data-block-id') === blockId) return i
+  }
+  return -1
 }
 
 function getBlockIndex(): number {
@@ -466,7 +563,7 @@ function getBlockIndex(): number {
   if (!parent) return -1
   const items = parent.querySelectorAll('[data-block-id]')
   for (let i = 0; i < items.length; i++) {
-    if (items[i].getAttribute('data-block-id') === String(block.id)) return i
+    if (items[i].getAttribute('data-block-id') === String(props.block.id)) return i
   }
   return -1
 }
@@ -479,6 +576,9 @@ function onMouseLeave() {
 // ===== 语言下拉选择器 =====
 const showLangDropdown = ref(false)
 const langSearchText = ref('')
+const langSearchInput = ref<HTMLInputElement>()
+const langDropdownPanel = ref<HTMLElement>()
+const langDropdownStyle = ref<Record<string, string>>({ top: '0px', left: '0px' })
 
 const languageOptions = [
   { label: 'Bash / Shell', value: 'bash' },
@@ -486,7 +586,7 @@ const languageOptions = [
   { label: 'HTML / XML', value: 'html' },
   { label: 'JavaScript / JS', value: 'javascript' },
   { label: 'JSON', value: 'json' },
-  { label: 'Markdown / MD', value: 'markdown' },
+  { label: 'Markdown / MD', value: 'text' },
   { label: 'Python', value: 'python' },
   { label: 'SQL', value: 'sql' },
   { label: 'TypeScript / TS', value: 'typescript' },
@@ -506,7 +606,37 @@ function selectLanguage(lang: string) {
   editLanguage.value = lang
   showLangDropdown.value = false
   langSearchText.value = ''
+  // 选择完成后重新聚焦 textarea，保持编辑连贯性
+  nextTick(() => inputRef.value?.focus())
 }
+
+/** Enter 键选择第一个过滤后的语言 */
+function selectFirstFilteredLang() {
+  const first = filteredLangOptions.value[0]
+  if (first) selectLanguage(first.value)
+}
+
+// 语言下拉打开时：计算面板定位 & 自动聚焦搜索框
+watch(showLangDropdown, (v) => {
+  if (!v) return
+  // 定位到触发按钮下方
+  const btn = document.querySelector<HTMLElement>('[data-code-lang-btn]')
+  if (btn) {
+    const rect = btn.getBoundingClientRect()
+    langDropdownStyle.value = { top: `${rect.bottom + 4}px`, left: `${Math.min(rect.left, window.innerWidth - 240)}px` }
+  }
+  langSearchText.value = ''
+  nextTick(() => {
+    langSearchInput.value?.focus()
+    // 面板渲染后做视口微调
+    if (langDropdownPanel.value) {
+      const pr = langDropdownPanel.value.getBoundingClientRect()
+      if (pr.bottom > window.innerHeight - 8) {
+        langDropdownStyle.value.top = `${Math.max(4, btn?.getBoundingClientRect().top ?? pr.top - pr.height - 4)}px`
+      }
+    }
+  })
+})
 
 // 新创建的空 block 自动进入编辑模式
 onMounted(() => {
@@ -578,6 +708,7 @@ const calloutClass = computed(() => {
 // ===== Block 操作菜单 =====
 const blockMenuOpen = ref(false)
 const blockMenuStyle = ref<Record<string, string>>({})
+const blockMenuPopup = ref<HTMLElement>()
 const showColorPicker = ref(false)
 
 const typeOptions = [
@@ -597,9 +728,11 @@ const colors = ['#fef3c7', '#dbeafe', '#dcfce7', '#fce7f3', '#f3e8ff', '#e0f2fe'
 
 function toggleBlockMenu(e: MouseEvent) {
   blockMenuOpen.value = !blockMenuOpen.value
+  if (!blockMenuOpen.value) return
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
   blockMenuStyle.value = { top: `${rect.bottom + 4}px`, left: `${rect.left}px` }
   showColorPicker.value = false
+  nextTick(() => adjustPopupToViewport(blockMenuStyle, rect, blockMenuPopup))
 }
 
 function changeType(newType: string) {
@@ -623,9 +756,12 @@ function toggleCenter() {
 // ===== 右键菜单 =====
 const ctxMenuOpen = ref(false)
 const ctxMenuStyle = ref<Record<string, string>>({})
+const ctxMenuPopup = ref<HTMLElement>()
 function onContextMenu(e: MouseEvent) {
   ctxMenuOpen.value = true
   ctxMenuStyle.value = { top: `${e.clientY}px`, left: `${e.clientX}px` }
+  const triggerRect = { top: e.clientY, bottom: e.clientY, left: e.clientX, right: e.clientX } as DOMRect
+  nextTick(() => adjustPopupToViewport(ctxMenuStyle, triggerRect, ctxMenuPopup))
 }
 function quickConvert(type: string, extra?: number | boolean) {
   ctxMenuOpen.value = false
@@ -652,22 +788,49 @@ async function startEdit(e?: MouseEvent) {
     } else if (props.block.type === 'image') {
       editText.value = String(props.block.content.url || '')
     } else if (props.block.type === 'table') {
-      const hdrs = tableData.value.headers.join(' | ')
-      editText.value = hdrs ? `| ${hdrs} |` : ''
+      editTableHeaders.value = [...tableData.value.headers]
+      editTableRows.value = tableData.value.rows.map(row => [...row])
+      // 至少保证有一列一行
+      if (editTableHeaders.value.length === 0) {
+        editTableHeaders.value = ['列1', '列2']
+      }
+      if (editTableRows.value.length === 0) {
+        editTableRows.value = [editTableHeaders.value.map(() => '')]
+      } else {
+        // 每行的列数补齐到与表头一致
+        for (let ri = 0; ri < editTableRows.value.length; ri++) {
+          while (editTableRows.value[ri].length < editTableHeaders.value.length) {
+            editTableRows.value[ri].push('')
+          }
+        }
+      }
+      await nextTick()
+      // 聚焦第一个表头输入框
+      const firstInput = (inputRef.value as HTMLElement)?.closest('.overflow-x-auto')?.querySelector('input')
+      if (firstInput instanceof HTMLInputElement) firstInput.focus()
     } else {
       editText.value = text.value
     }
     await nextTick()
     inputRef.value?.focus()
+    // 确保 textarea 高度与已有内容一致，避免编辑框变小
+    nextTick(() => autoResize())
   }
 }
 
 function autoResize() {
   const el = inputRef.value
   if (el instanceof HTMLTextAreaElement) {
+    // 移除 rows 属性约束，让 scrollHeight 生效
+    el.removeAttribute('rows')
     el.style.height = 'auto'
     el.style.height = el.scrollHeight + 'px'
   }
+}
+
+/** 粘贴后触发 autoResize，确保输入框高度适配粘贴内容 */
+function onPaste() {
+  nextTick(() => autoResize())
 }
 
 function saveEdit() {
@@ -683,15 +846,7 @@ function saveEdit() {
   }
 
   if (props.block.type === 'table') {
-    const tableMatch = newText.match(/^\|(.+)\|$/)
-    if (tableMatch) {
-      const headers = tableMatch[1].split('|').map(h => h.trim()).filter(Boolean)
-      if (headers.length >= 2) {
-        emit('save', { ...props.block.content, headers })
-        return
-      }
-    }
-    cancelEdit()
+    saveTableEdit()
     return
   }
 
@@ -712,6 +867,9 @@ function saveEdit() {
 
 function saveCodeEdit() {
   if (!editing.value) return
+  // 语言下拉打开中：下拉面板已通过 Teleport+mousedown.prevent 隔离交互，
+  // 此处 blur 可能由面板内部搜索框焦点引起，直接跳过保存
+  if (showLangDropdown.value) return
   editing.value = false
   const newCode = editText.value
   const newLang = editLanguage.value.trim() || 'text'
@@ -740,6 +898,93 @@ function saveListEdit() {
   if (newText !== text.value) {
     emit('save', { ...props.block.content, items: [newText], text: newText })
   }
+}
+
+/** 将弹出面板调整到视口内：如果下方放不下则翻转到触发元素上方，右边界溢出则向左偏移 */
+function adjustPopupToViewport(
+  styleRef: Ref<Record<string, string>>,
+  triggerRect: DOMRect,
+  popupRef?: Ref<HTMLElement | undefined>,
+  gap = 4,
+) {
+  const popup = popupRef?.value
+  if (!popup) return
+  const popupRect = popup.getBoundingClientRect()
+  const vh = window.innerHeight
+  const vw = window.innerWidth
+  let newTop: string | undefined
+  let newLeft: string | undefined
+
+  // 底部溢出 → 翻转到上方
+  if (popupRect.bottom > vh - 8) {
+    newTop = `${Math.max(4, triggerRect.top - popupRect.height - gap)}px`
+  }
+  // 右边界溢出 → 向左偏移
+  if (popupRect.right > vw - 8) {
+    newLeft = `${Math.max(4, vw - popupRect.width - 8)}px`
+  }
+
+  if (newTop || newLeft) {
+    styleRef.value = {
+      ...styleRef.value,
+      ...(newTop ? { top: newTop } : {}),
+      ...(newLeft ? { left: newLeft } : {}),
+    }
+  }
+}
+
+// ===== 表格编辑函数 =====
+function saveTableEdit() {
+  if (!editing.value) return
+  editing.value = false
+  // 过滤掉完全空的列
+  const headers = editTableHeaders.value.map(h => h.trim())
+  // 保留至少两列
+  const cleanHeaders = headers.length >= 2 ? headers : ['列1', '列2']
+  const cleanRows = editTableRows.value.map(row =>
+    row.map(cell => cell.trim())
+  )
+  emit('save', {
+    ...props.block.content,
+    headers: cleanHeaders,
+    rows: cleanRows.length > 0 ? cleanRows : [cleanHeaders.map(() => '')],
+  })
+}
+
+function addTableRow() {
+  const cols = editTableHeaders.value.length || 2
+  const newRow = Array(cols).fill('')
+  editTableRows.value.push(newRow)
+}
+
+function addTableCol() {
+  editTableHeaders.value.push('新列')
+  for (const row of editTableRows.value) {
+    row.push('')
+  }
+}
+
+function deleteTableRow() {
+  if (editTableRows.value.length > 1) {
+    editTableRows.value.pop()
+  }
+}
+
+function deleteTableCol() {
+  if (editTableHeaders.value.length > 1) {
+    editTableHeaders.value.pop()
+    for (const row of editTableRows.value) {
+      row.pop()
+    }
+  }
+}
+
+/** 表格内 Enter 键：保存并创建下方 Block */
+function onTableEnter(e: KeyboardEvent, _source: string, _ri?: number, _ci?: number) {
+  // Shift+Enter 不处理，允许换行（由浏览器默认行为）
+  if (e.shiftKey) return
+  saveTableEdit()
+  nextTick(() => emit('createBelow'))
 }
 
 function cancelEdit() {
@@ -916,7 +1161,32 @@ function checkMarkdownShortcut(input: string): { type?: string; content: Record<
   if (input.startsWith('$$')) {
     return { type: 'code', content: { language: 'math', code: '' } }
   }
-  // | ... | ... | 表格
+  // | ... | ... | 表格（支持多行粘贴）
+  const lines = input.split('\n')
+  if (lines.length >= 2) {
+    // 检测多行 Markdown 表格：表头行 + 分隔行 + 可选数据行
+    const headerLine = lines[0].trim()
+    const sepLine = (lines[1] || '').trim()
+    const headerMatch = headerLine.match(/^\|(.+)\|$/)
+    const sepMatch = sepLine.match(/^\|[\s:-]+\|[\s|:-]+$/)
+    if (headerMatch && sepMatch) {
+      const headers = headerMatch[1].split('|').map(h => h.trim()).filter(Boolean)
+      if (headers.length >= 2) {
+        const rows: string[][] = []
+        for (let li = 2; li < lines.length; li++) {
+          const rowLine = lines[li].trim()
+          const rowMatch = rowLine.match(/^\|(.+)\|$/)
+          if (rowMatch) {
+            const cells = rowMatch[1].split('|').map(c => c.trim())
+            while (cells.length < headers.length) cells.push('')
+            rows.push(cells)
+          }
+        }
+        return { type: 'table', content: { headers, rows } }
+      }
+    }
+  }
+  // 单行表格：| col1 | col2 |
   const tableMatch = input.match(/^\|(.+)\|$/)
   if (tableMatch) {
     const headers = tableMatch[1].split('|').map(h => h.trim()).filter(Boolean)

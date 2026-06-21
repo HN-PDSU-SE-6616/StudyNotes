@@ -102,6 +102,12 @@ export interface HotItem {
   extra: Record<string, unknown>
 }
 
+/** 表格块内容结构 */
+export interface TableBlockContent {
+  headers: string[]
+  rows: string[][]
+}
+
 /** 热点聚合 */
 export interface HotspotResponse {
   github: HotItem[]
