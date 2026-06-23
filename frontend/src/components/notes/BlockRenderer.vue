@@ -157,14 +157,23 @@
       <!-- 代码 -->
       <div v-else-if="block.type === 'code'" class="my-2">
         <div v-if="!editing" class="cursor-pointer" @click="startEdit">
-          <div class="flex items-center justify-between mb-1">
+          <div class="flex items-center mb-1">
             <span class="text-[10px] font-mono text-slate-400 uppercase">{{ language || 'text' }}</span>
-            <button class="text-[10px] text-slate-400 hover:text-slate-600" @click.stop="copyCode">复制</button>
           </div>
-          <pre
-            class="bg-slate-900 rounded-xl p-4 text-sm overflow-x-auto font-mono min-h-[3em]"
-            :class="{ 'opacity-50': !code }"
-          ><code v-if="code" class="hljs-code-block" v-html="highlightedCode" /><code v-else class="text-slate-400">点击编辑代码...</code></pre>
+          <div class="relative group/code-view">
+            <pre
+              class="bg-slate-900 rounded-xl p-4 pr-12 text-sm overflow-x-auto font-mono min-h-[3em]"
+              :class="{ 'opacity-50': !code }"
+            ><code v-if="code" class="hljs-code-block" v-html="highlightedCode" /><code v-else class="text-slate-400">点击编辑代码...</code></pre>
+            <button
+              v-if="code"
+              class="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-lg bg-slate-700/60 text-slate-400 hover:text-white hover:bg-slate-600 transition-all opacity-0 group-hover/code-view:opacity-100"
+              title="复制代码"
+              @click.stop="copyCode"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+            </button>
+          </div>
         </div>
         <div v-else class="bg-slate-900 rounded-xl">
           <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-700 relative">
@@ -219,18 +228,36 @@
             <div class="flex-1" />
             <button class="text-[10px] text-slate-400 hover:text-slate-200" @click="copyCode">复制</button>
           </div>
-          <textarea
-            ref="inputRef"
-            v-model="editText"
-            class="w-full resize-none bg-transparent text-slate-100 p-4 text-sm font-mono outline-none"
-            style="min-height: 3em"
-            placeholder="输入代码..."
-            @keydown.escape="cancelEdit"
-            @keydown="onEditKeydown"
-            @input="autoResize"
-            @paste="onPaste"
-            @blur="saveCodeEdit"
-          />
+          <div class="relative" style="min-height: 3em">
+            <!-- 底层：实时语法高亮渲染 -->
+            <pre
+              ref="codePreRef"
+              class="p-4 pr-12 text-sm font-mono leading-relaxed whitespace-pre-wrap break-words m-0"
+              aria-hidden="true"
+            ><code class="hljs-code-block" v-html="highlightedEditCode || '&#10;'" /></pre>
+            <!-- 上层：透明文字的 textarea 用于输入 -->
+            <textarea
+              ref="inputRef"
+              v-model="editText"
+              class="absolute inset-0 w-full h-full resize-none bg-transparent text-transparent [-webkit-text-fill-color:transparent] caret-white p-4 pr-12 text-sm font-mono leading-relaxed outline-none overflow-auto selection:bg-brand-500/20 selection:text-transparent selection:[-webkit-text-fill-color:transparent]"
+              spellcheck="false"
+              placeholder="输入代码..."
+              @keydown.escape="cancelEdit"
+              @keydown="onEditKeydown"
+              @paste="onPaste"
+              @scroll="syncCodeScroll"
+              @blur="saveCodeEdit"
+            />
+            <!-- 右上角复制按钮 -->
+            <button
+              v-if="editText"
+              class="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-lg bg-slate-700/60 text-slate-400 hover:text-white hover:bg-slate-600 transition-all"
+              title="复制代码"
+              @click.stop="copyCode"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -450,7 +477,6 @@ hljs.registerLanguage('ts', typescript)
 hljs.registerLanguage('sql', sql)
 hljs.registerLanguage('yaml', yaml)
 hljs.registerLanguage('yml', yaml)
-hljs.registerLanguage('markdown', markdown)
 hljs.registerLanguage('md', markdown)
 
 const props = defineProps<{
@@ -484,6 +510,7 @@ const editing = ref(false)
 const editText = ref('')
 const editLanguage = ref('')
 const inputRef = ref<HTMLInputElement | HTMLTextAreaElement | null>(null)
+const codePreRef = ref<HTMLElement | null>(null)
 
 // ===== 表格编辑状态 =====
 const editTableHeaders = ref<string[]>([])
@@ -819,12 +846,24 @@ async function startEdit(e?: MouseEvent) {
 }
 
 function autoResize() {
+  // 代码块使用 pre+textarea 叠加层方案，容器高度由 pre 驱动，不需要手动 resize
+  if (props.block.type === 'code') return
   const el = inputRef.value
   if (el instanceof HTMLTextAreaElement) {
     // 移除 rows 属性约束，让 scrollHeight 生效
     el.removeAttribute('rows')
     el.style.height = 'auto'
     el.style.height = el.scrollHeight + 'px'
+  }
+}
+
+/** 代码块编辑时同步 textarea 滚动位置到 pre 元素 */
+function syncCodeScroll() {
+  const pre = codePreRef.value
+  const ta = inputRef.value
+  if (pre && ta) {
+    pre.scrollTop = ta.scrollTop
+    pre.scrollLeft = ta.scrollLeft
   }
 }
 
@@ -1037,6 +1076,21 @@ const highlightedCode = computed(() => {
   return hljs.highlightAuto(rawCode).value
 })
 
+/** 编辑模式下实时语法高亮（底层 pre 渲染用） */
+const highlightedEditCode = computed(() => {
+  const rawCode = editText.value
+  if (!rawCode) return ''
+  const lang = editLanguage.value.toLowerCase()
+  if (lang && hljs.getLanguage(lang)) {
+    try {
+      return hljs.highlight(rawCode, { language: lang }).value
+    } catch {
+      // 高亮失败时回退
+    }
+  }
+  return hljs.highlightAuto(rawCode).value
+})
+
 // ===== 编辑模式键盘快捷键 =====
 function onEditKeydown(e: KeyboardEvent) {
   // 空 Block 双击 Backspace 删除
@@ -1202,7 +1256,9 @@ function navigateToPage() {
 }
 
 async function copyCode() {
-  await navigator.clipboard.writeText(code.value)
+  // 编辑模式下复制正在编辑的代码，查看模式下复制已保存的代码
+  const codeToCopy = editing.value && props.block.type === 'code' ? editText.value : code.value
+  await navigator.clipboard.writeText(codeToCopy)
 }
 
 async function toggleTaskItem(index: number) {
