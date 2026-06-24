@@ -51,7 +51,7 @@ class Page(SQLModel, table=True):
     workspace_id: int = Field(foreign_key="workspace.id", index=True)
     slug: str = Field(default_factory=_gen_slug, unique=True, index=True, max_length=16)
     title: str = Field(index=True)
-    icon: Optional[str] = Field(default="📄")
+    icon: Optional[str] = Field(default="doc")
     category: str = Field(default=PageCategory.CUSTOM.value)
     parent_id: Optional[int] = Field(default=None, foreign_key="page.id")
     sort_order: int = Field(default=0)

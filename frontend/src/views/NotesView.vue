@@ -5,7 +5,6 @@
       :active-id="pageStore.currentPage?.id ?? null"
       @select="onSelectPage"
       @create="onCreatePage"
-      @create-sub-page="onCreateSubPage"
     />
     <PageEditor
       @navigate="onSelectPage"
@@ -66,13 +65,8 @@ function findPageById(nodes: import('@/types').PageTreeNode[], id: number): impo
   return null
 }
 
-async function onCreatePage() {
-  const page = await pageStore.createPage()
-  router.push(`/notes/${page.slug}`)
-}
-
-async function onCreateSubPage(parentId: number) {
-  const page = await pageStore.createSubPage(parentId)
+async function onCreatePage(parentId?: number) {
+  const page = await pageStore.createPage(undefined, undefined, parentId)
   router.push(`/notes/${page.slug}`)
 }
 </script>

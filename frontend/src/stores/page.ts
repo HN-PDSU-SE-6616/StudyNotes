@@ -61,14 +61,10 @@ export const usePageStore = defineStore('page', () => {
     return path
   }
 
-  async function createPage(title = '无标题页面') {
-    const { data } = await pagesApi.create({ title, icon: '📄' })
-    await fetchTree()
-    return data
-  }
-
-  async function createSubPage(parentId: number, title = '无标题子页面') {
-    const { data } = await pagesApi.create({ title, icon: '📄', parent_id: parentId })
+  async function createPage(title = '无标题页面', icon = 'doc', parentId?: number) {
+    const payload: { title: string; icon: string; parent_id?: number } = { title, icon }
+    if (parentId) payload.parent_id = parentId
+    const { data } = await pagesApi.create(payload)
     await fetchTree()
     return data
   }
@@ -250,7 +246,6 @@ export const usePageStore = defineStore('page', () => {
     fetchPageBySlug,
     getBreadcrumb,
     createPage,
-    createSubPage,
     updatePage,
     renamePage,
     movePage,

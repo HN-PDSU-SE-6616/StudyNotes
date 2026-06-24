@@ -82,11 +82,10 @@ async def create_page(
     await session.commit()
     await session.refresh(page)
 
-    # 新增页面默认添加一个一级标题 block
-    h1_text = page.title if page.title not in ('无标题页面', '无标题子页面') else ''
+    # 新增页面默认添加一个空段落 block（用于内容占位提示）
     block = Block(
-        page_id=page.id, type='heading',
-        content={'level': 1, 'text': h1_text},
+        page_id=page.id, type='paragraph',
+        content={'text': ''},
         sort_order=0,
     )
     session.add(block)
@@ -382,9 +381,12 @@ def _detect_common_prefix(paths: list[str]) -> str:
 
 
 def _is_placeholder_only_page(existing_blocks: list[Block]) -> bool:
-    """检查页面是否只有占位 block（默认 H1 空标题）"""
+    """检查页面是否只有占位 block（默认空段落块或空 H1 标题块）"""
     if len(existing_blocks) == 1:
         b = existing_blocks[0]
+        if b.type == 'paragraph':
+            para_text = (b.content.get('text') or '').strip()
+            return not para_text
         if b.type == 'heading' and b.content.get('level') == 1:
             h1_text = (b.content.get('text') or '').strip()
             return not h1_text

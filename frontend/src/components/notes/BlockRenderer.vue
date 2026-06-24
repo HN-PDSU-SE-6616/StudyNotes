@@ -114,7 +114,7 @@
           class="text-slate-700 leading-relaxed cursor-text min-h-[1.5em]"
           :class="{ [placeholderClass]: !text }"
           @click="startEdit"
-          v-html="formattedText || '输入内容...'"
+          v-html="formattedText || props.contentPlaceholder || ''"
         />
         <textarea
           v-else
@@ -489,6 +489,8 @@ const props = defineProps<{
     autoNumbering?: boolean
   }
   headingNumber?: string
+  /** Custom placeholder text shown when the paragraph block is empty */
+  contentPlaceholder?: string
 }>()
 
 const emit = defineEmits<{
@@ -665,8 +667,9 @@ watch(showLangDropdown, (v) => {
   })
 })
 
-// 新创建的空 block 自动进入编辑模式
+// 新创建的空 block 自动进入编辑模式（有 contentPlaceholder 时跳过，以便显示占位提示）
 onMounted(() => {
+  if (props.contentPlaceholder) return
   const contentText = String(props.block.content.text || props.block.content.code || props.block.content.url || '')
   const hasTableHeaders = Array.isArray(props.block.content.headers) && (props.block.content.headers as unknown[]).length > 0
   if (!contentText && !hasTableHeaders && ['paragraph', 'heading', 'quote', 'callout', 'list', 'code', 'image', 'table'].includes(props.block.type)) {
