@@ -234,7 +234,7 @@
               ref="codePreRef"
               class="p-4 pr-12 text-sm font-mono leading-relaxed whitespace-pre-wrap break-words m-0"
               aria-hidden="true"
-            ><code class="hljs-code-block" v-html="highlightedEditCode || '&#10;'" /></pre>
+            ><code class="hljs-code-block" v-html="highlightedEditCodeOrBlank" /></pre>
             <!-- 上层：透明文字的 textarea 用于输入 -->
             <textarea
               ref="inputRef"
@@ -1076,10 +1076,10 @@ const highlightedCode = computed(() => {
   return hljs.highlightAuto(rawCode).value
 })
 
-/** 编辑模式下实时语法高亮（底层 pre 渲染用） */
-const highlightedEditCode = computed(() => {
+/** 编辑模式下实时语法高亮（底层 pre 渲染用），返回 HTML 字符串；空时返回换行占位防止 pre 塌陷 */
+const highlightedEditCodeOrBlank = computed(() => {
   const rawCode = editText.value
-  if (!rawCode) return ''
+  if (!rawCode) return '&#10;'
   const lang = editLanguage.value.toLowerCase()
   if (lang && hljs.getLanguage(lang)) {
     try {
@@ -1090,6 +1090,8 @@ const highlightedEditCode = computed(() => {
   }
   return hljs.highlightAuto(rawCode).value
 })
+
+/** 编辑模式下实时语法高亮的原始版（保留用于其他地方？已合并到上方） */
 
 // ===== 编辑模式键盘快捷键 =====
 function onEditKeydown(e: KeyboardEvent) {
