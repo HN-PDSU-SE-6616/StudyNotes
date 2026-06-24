@@ -1,5 +1,26 @@
 # import_notes.py
+"""
+旧版笔记批量导入工具
+
+用法:
+    # 使用默认路径 (data/)
+    python import_notes.py
+
+    # 指定自定义路径
+    python import_notes.py ./my_notes
+    python import_notes.py D:/exports/wolai_export
+
+    # 通过环境变量设置
+    set NOTES_IMPORT_PATH=D:/my_exports
+    python import_notes.py
+
+注意:
+    - 适用于 Wolai（我来）导出的 HTML 格式笔记
+    - 会递归扫描指定目录下的所有子目录
+    - 自动跳过 media/css/fonts 等资源目录
+"""
 import os
+import sys
 import asyncio
 from sqlmodel import SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,8 +28,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import engine, async_session
 from app.models import Note
 
-
-NOTES_ROOT = os.path.abspath("data")
+# 路径优先级: 命令行参数 > 环境变量 > 默认值
+NOTES_ROOT = os.path.abspath(
+    sys.argv[1] if len(sys.argv) > 1
+    else os.environ.get("NOTES_IMPORT_PATH", "data")
+)
 RESERVED_DIRS = {"media", "css", "fonts"}
 
 

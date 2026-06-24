@@ -8,6 +8,7 @@ from async_lru import alru_cache
 from markdown.extensions import fenced_code, tables, toc
 
 from app.models import Note
+from app.core.config import settings
 
 ASSET_PATTERN = re.compile(r'(src|href|url)\s*=\s*["\'](?!http|/|data:)([^"\']+)["\']')
 
@@ -59,6 +60,6 @@ async def get_note_content(note: "Note") -> str:
     if note.content_type == "file" and note.content_path:
         # 获取文件所在的相对目录
         relative_dir = os.path.dirname(note.content_path)
-        full_path = os.path.join("data", note.content_path)
+        full_path = os.path.join(settings.notes_data_path, note.content_path)
         return await read_content_from_disk(full_path, relative_dir)
     return note.content_db or ""

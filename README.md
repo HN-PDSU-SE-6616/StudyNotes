@@ -282,7 +282,7 @@ frontend/
 ## 六、目录结构
 
 ```
-笔记/
+项目根目录/
 ├── app/
 │   ├── main.py                 # FastAPI 入口
 │   ├── database.py             # 异步数据库连接
@@ -301,12 +301,13 @@ frontend/
 │   │   ├── blocks.py           # Block CRUD
 │   │   ├── hotspots.py         # 首页热点
 │   │   ├── notes.py            # 旧版笔记（兼容）
+│   │   ├── files.py            # 文件上传管理
 │   │   └── convert.py          # MD 转换
 │   ├── services/
 │   │   ├── page_service.py     # 页面树、关系图、链接同步
 │   │   └── hotspot_service.py  # 热点聚合 + 缓存
 │   └── utils/
-│       └── markdown.py
+│       └── markdown.py         # Markdown 转换 + 路径修复
 ├── frontend/                   # Vue3 前端
 │   ├── src/
 │   │   ├── api/                # API 请求层
@@ -318,46 +319,102 @@ frontend/
 │   ├── vite.config.ts
 │   ├── tailwind.config.js
 │   └── index.html
-├── static/                     # 静态资源
-├── templates/                  # 旧版 HTML 模板
+├── static/                     # 静态资源（上传文件存储）
 ├── uploads/                    # 上传的 MD 文件
-├── data/                       # 笔记 HTML 资源
-├── requirements.txt
+├── data/                       # 旧版笔记 HTML 资源（可选）
+├── .env.example                # 环境变量模板（会被 Git 跟踪）
+├── .env                        # 本地环境变量（自动生成，不提交 Git）
+├── requirements.txt            # Python 依赖
+├── import_notes.py             # 旧版笔记导入工具
+├── start.bat                   # 一键启动（CMD）
+├── start.ps1                   # 一键启动（PowerShell）
 ├── blog.db                     # SQLite 数据库（运行时生成）
 └── README.md
 ```
 
 ---
 
-## 七、启动命令
+## 七、快速开始
 
 ### 7.1 环境要求
 
-- Python 3.9+
-- Node.js 18+（前端开发）
+- **Python** 3.9+
+- **Node.js** 18+（推荐 18.x LTS，兼容至 22.x）
 
-### 7.2 一键启动（推荐）
+### 7.2 一键启动（推荐 ⭐）
 
-项目根目录提供了两种一键启动脚本，自动完成环境检测、虚拟环境创建、依赖安装和服务启动：
+项目根目录提供了两种启动脚本，自动完成**环境检测 → 创建配置文件 → 虚拟环境 → 依赖安装 → 服务启动**：
 
 | 脚本 | 适用场景 | 运行方式 |
 |------|---------|---------|
-| `start.bat` | CMD / 传统终端 | 双击运行 |
+| `start.bat` | 双击运行（CMD） | 直接双击 |
 | `start.ps1` | PowerShell（推荐） | `powershell -ExecutionPolicy Bypass -File start.ps1` |
 
-**脚本自动执行流程：**
+**脚本自动执行流程（6 步）：**
 
 ```
-[1/5] 检测运行环境  → 检查 Python / Node.js 是否安装，缺失则提供下载地址
-[2/5] 配置虚拟环境  → 无 venv/ 则自动创建 python -m venv venv
-[3/5] 检查后端依赖  → 未安装时自动 pip install -r requirements.txt
-[4/5] 检查前端依赖  → frontend/node_modules 不存在时自动 npm install
-[5/5] 启动服务      → 分别在独立窗口中启动后端 (:8000) 和前端 (:5173)
+[1/6] 检测运行环境     → 检查 Python / Node.js 是否安装，显示路径和版本
+[2/6] 检查必备文件     → 自动创建 .env 配置文件（首次）
+                      → 自动创建 uploads/、static/ 目录
+[3/6] 配置虚拟环境     → 无 venv/ 则自动创建 python -m venv venv
+[4/6] 检查后端依赖     → 未安装时自动 pip install -r requirements.txt
+[5/6] 检查前端依赖     → frontend/node_modules/vite 不存在时自动 npm install
+[6/6] 启动服务        → 分别在独立窗口中启动后端 (:8000) 和前端 (:5173)
 ```
 
-> **注意**：PowerShell 脚本需 UTF-8 BOM 编码以支持中文显示。若遇到执行策略限制，请使用 `-ExecutionPolicy Bypass` 参数。
+> **开箱即用**：首次运行脚本会自动创建 `.env`（从 `.env.example` 复制默认配置），无需手动配置即可启动。
 
-### 7.3 后端（手动启动）
+### 7.3 环境变量配置（可选）
+
+项目启动脚本会自动创建 `.env` 文件。如需自定义配置，编辑 `.env`：
+
+```env
+# JWT 认证密钥（生产环境务必修改为随机字符串！）
+# 可使用 python -c "import secrets; print(secrets.token_hex(32))" 生成
+SECRET_KEY=change-me-in-production-use-env-var
+
+# JWT 签名算法
+ALGORITHM=HS256
+
+# Access Token 过期时间（分钟），默认 1440 = 24 小时
+ACCESS_TOKEN_EXPIRE_MINUTES=1440
+
+# Refresh Token 过期时间（天）
+REFRESH_TOKEN_EXPIRE_DAYS=7
+
+# 数据库文件路径（SQLite）
+DATABASE_URL=sqlite+aiosqlite:///./blog.db
+
+# 旧版笔记数据目录（仅导入 Wolai 导出笔记时需要，新项目可忽略）
+NOTES_DATA_PATH=data
+```
+
+> 详细注释见 `.env.example` 模板文件。`.env` 已在 `.gitignore` 中排除，不会被提交到 Git。
+
+### 7.4 导入旧版笔记（可选）
+
+如果你有从 Wolai（我来）导出的 HTML 格式笔记，可以使用导入工具：
+
+```powershell
+# 激活虚拟环境后执行
+
+# 使用默认路径 (data/)
+python import_notes.py
+
+# 指定自定义路径（支持任意目录，灵活适配分散的笔记）
+python import_notes.py ./my_notes
+python import_notes.py D:/exports/wolai_backup
+
+# 或通过环境变量设置
+$env:NOTES_IMPORT_PATH = "D:/my_exports"
+python import_notes.py
+```
+
+导入工具会递归扫描指定目录，自动构建层级笔记树并存入数据库。
+
+> **注意**：`data/` 目录不再必需。如果没有旧版笔记数据，系统正常运行所有新功能（Block 编辑器、热点聚合等）。
+
+### 7.5 后端（手动启动）
 
 ```powershell
 # 在项目根目录下执行
@@ -377,7 +434,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 - API 文档：http://127.0.0.1:8000/docs
 - 旧版页面：http://127.0.0.1:8000/Taot
 
-### 7.4 前端（手动启动）
+### 7.6 前端（手动启动）
 
 ```powershell
 # 进入前端目录
@@ -394,17 +451,7 @@ npm run dev
 
 > 需同时启动后端（8000 端口），前端通过 Vite 代理转发 `/Taot` 请求。
 
-### 7.5 环境变量（可选）
-
-在项目根目录创建 `.env` 文件：
-
-```env
-SECRET_KEY=your-random-secret-key-here
-DATABASE_URL=sqlite+aiosqlite:///./blog.db
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
-```
-
-### 7.6 快速验证 API
+### 7.7 快速验证 API
 
 ```powershell
 # 注册用户
@@ -446,3 +493,25 @@ curl -X POST http://127.0.0.1:8000/Taot/pages/ `
 3. **用户隔离**：所有页面操作通过 `Workspace → owner_id` 校验，保证多用户数据安全
 4. **渐进迁移**：旧版 `/notes` 接口保留，新 Block 模型并行运行，降低迁移风险
 5. **热点解耦**：首页热点通过独立 service 聚合 + 缓存，不侵入核心业务逻辑
+
+---
+
+## 十、常见问题
+
+### Q: 启动脚本闪退怎么办？
+A: 请使用 PowerShell 运行 `start.ps1`（`powershell -ExecutionPolicy Bypass -File start.ps1`）。如果 `.bat` 脚本中文乱码，将终端编码设置为 UTF-8（`chcp 65001`）。
+
+### Q: 前端报错 "'vite' 不是内部或外部命令"？
+A: 说明 `npm install` 未完成依赖安装。删除 `frontend/node_modules` 目录后重新运行启动脚本，脚本会自动检测并重新安装。
+
+### Q: 后端报错 "Directory 'uploads' does not exist"？
+A: 启动脚本会自动创建 `uploads/` 和 `static/` 目录。如果手动启动，请先运行 `mkdir uploads static`。
+
+### Q: Node.js 版本太低怎么办？
+A: 项目要求 Node.js 18+。启动脚本会自动检测版本并给出警告。推荐安装 Node.js 18 LTS 版本（下载地址：https://nodejs.org/）。
+
+### Q: 如何重置数据库？
+A: 删除 `blog.db` 文件，重启后端即可自动重建。注意这会清除所有用户和笔记数据。
+
+### Q: 如何导入分散在不同目录的笔记？
+A: 使用 `python import_notes.py <目录路径>` 指定任意路径导入，或设置环境变量 `NOTES_IMPORT_PATH`。多次运行可导入多个目录。

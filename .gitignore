@@ -8,3 +8,5 @@ venv
 /frontend/node_modules/
 /frontend/dist/
 uploads/
+data/
+static/uploads/

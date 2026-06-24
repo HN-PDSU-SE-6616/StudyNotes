@@ -14,7 +14,9 @@ from app.models import Note, NoteCreate, NoteRead, NoteUpdate
 from datetime import datetime
 
 from app.utils.markdown import fix_html_assets
-from import_notes import NOTES_ROOT
+from app.core.config import settings
+
+NOTES_ROOT = os.path.abspath(settings.notes_data_path)
 
 router = APIRouter(prefix="/notes", tags=["笔记管理"])
 

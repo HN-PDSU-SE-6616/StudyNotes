@@ -45,6 +45,16 @@ if (-not $nodeCmd) {
     }
 }
 
+# Verify Node.js version >= 18
+$nodeVersionRaw = (node --version 2>&1) -replace 'v', ''
+$nodeMajor = [int]($nodeVersionRaw -split '\.')[0]
+if ($nodeMajor -lt 18) {
+    Write-Host "[WARNING] Node.js version $($nodeCmd.Version) is below minimum required (18.x). Please upgrade to Node.js 18+ for full compatibility." -ForegroundColor Yellow
+    Write-Host '           Download: https://nodejs.org/' -ForegroundColor White
+    Write-Host '           The app may still work but some features might not be available.' -ForegroundColor Yellow
+    Write-Host ''
+}
+
 Write-Host "Python path: $($pythonCmd.Source)" -ForegroundColor Gray
 Write-Host "Python version: $($pythonCmd.Version)" -ForegroundColor Green
 Write-Host "Node.js path: $($nodeCmd.Source)" -ForegroundColor Gray
@@ -52,8 +62,51 @@ Write-Host "Node.js version: $($nodeCmd.Version)" -ForegroundColor Green
 Write-Host '[OK] Python and Node.js ready' -ForegroundColor Green
 Write-Host ''
 
+# ==================== Auto-create Essential Files ====================
+Write-Host '[2/6] Checking essential files...' -ForegroundColor Yellow
+
+# --- .env file ---
+$envFile = Join-Path $ProjectRoot '.env'
+$envExampleFile = Join-Path $ProjectRoot '.env.example'
+if (-not (Test-Path $envFile)) {
+    if (Test-Path $envExampleFile) {
+        Write-Host '        .env not found, copying from .env.example (default config)...' -ForegroundColor White
+        Copy-Item $envExampleFile $envFile
+        Write-Host "[OK] .env created from .env.example (path: $envFile)" -ForegroundColor Green
+    } else {
+        Write-Host '        .env and .env.example not found, creating .env with default config...' -ForegroundColor White
+        $defaultEnv = @'
+# Taot Knowledge Base - Environment Config (auto-generated)
+SECRET_KEY=change-me-in-production-use-env-var
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=1440
+REFRESH_TOKEN_EXPIRE_DAYS=7
+DATABASE_URL=sqlite+aiosqlite:///./blog.db
+NOTES_DATA_PATH=data
+'@
+        Set-Content -Path $envFile -Value $defaultEnv -Encoding UTF8
+        Write-Host "[OK] .env created with default config (path: $envFile)" -ForegroundColor Green
+    }
+} else {
+    Write-Host "[OK] .env already exists, skipping (path: $envFile)" -ForegroundColor Green
+}
+
+# --- Required directories ---
+$requiredDirs = @('uploads', 'static')
+foreach ($dir in $requiredDirs) {
+    $dirPath = Join-Path $ProjectRoot $dir
+    if (-not (Test-Path $dirPath)) {
+        New-Item -ItemType Directory -Path $dirPath -Force | Out-Null
+        Write-Host "[OK] Directory created: $dir" -ForegroundColor Green
+    } else {
+        Write-Host "[OK] Directory exists: $dir" -ForegroundColor Green
+    }
+}
+
+Write-Host ''
+
 # ==================== Virtual Environment ====================
-Write-Host '[2/5] Configuring Python virtual environment...' -ForegroundColor Yellow
+Write-Host '[3/6] Configuring Python virtual environment...' -ForegroundColor Yellow
 
 $venvPath = Join-Path $ProjectRoot 'venv'
 $activateScript = Join-Path $venvPath 'Scripts\Activate.ps1'
@@ -82,7 +135,7 @@ if (-not (Test-Path $activateScript)) {
 Write-Host ''
 
 # ==================== Backend Dependencies ====================
-Write-Host '[3/5] Checking backend dependencies...' -ForegroundColor Yellow
+Write-Host '[4/6] Checking backend dependencies...' -ForegroundColor Yellow
 
 $requirementsFile = Join-Path $ProjectRoot 'requirements.txt'
 $fastapiCheck = pip show fastapi 2>$null
@@ -109,7 +162,7 @@ if (-not $fastapiCheck) {
 Write-Host ''
 
 # ==================== Frontend Dependencies ====================
-Write-Host '[4/5] Checking frontend dependencies...' -ForegroundColor Yellow
+Write-Host '[5/6] Checking frontend dependencies...' -ForegroundColor Yellow
 
 $frontendPath = Join-Path $ProjectRoot 'frontend'
 $nodeModulesPath = Join-Path $frontendPath 'node_modules'
@@ -143,7 +196,7 @@ if (-not $depsInstalled) {
 Write-Host ''
 
 # ==================== Start Services ====================
-Write-Host '[5/5] Starting services...' -ForegroundColor Yellow
+Write-Host '[6/6] Starting services...' -ForegroundColor Yellow
 Write-Host ''
 
 Write-Host 'Starting backend server (http://127.0.0.1:8000)...' -ForegroundColor White

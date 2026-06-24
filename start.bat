@@ -30,11 +30,61 @@ if %errorlevel% neq 0 (
 for /f "tokens=*" %%i in ('where node') do echo [INFO] Node.js path: %%i
 for /f "tokens=*" %%i in ('node --version 2^>^&1') do echo [INFO] Node.js version: %%i
 
+:: Check Node.js major version >= 18
+for /f "tokens=1 delims=v." %%v in ('node --version 2^>^&1') do (
+    if %%v LSS 18 (
+        echo [WARNING] Node.js version is below minimum required ^(18.x^). Please upgrade to Node.js 18+. echo          Download: https://nodejs.org/
+        echo          The app may still work but some features might not be available.
+        echo.
+    )
+)
+
 echo [OK] Python and Node.js ready
 echo.
 
+:: ==================== Auto-create Essential Files ====================
+echo [2/6] Checking essential files...
+
+:: --- .env file ---
+if not exist ".env" (
+    if exist ".env.example" (
+        echo         .env not found, copying from .env.example ^(default config^)...
+        copy /y ".env.example" ".env" >nul
+        echo [OK] .env created from .env.example
+    ) else (
+        echo         .env and .env.example not found, creating .env with default config...
+        (
+            echo # Taot Knowledge Base - Environment Config ^(auto-generated^)
+            echo SECRET_KEY=change-me-in-production-use-env-var
+            echo ALGORITHM=HS256
+            echo ACCESS_TOKEN_EXPIRE_MINUTES=1440
+            echo REFRESH_TOKEN_EXPIRE_DAYS=7
+            echo DATABASE_URL=sqlite+aiosqlite:///./blog.db
+            echo NOTES_DATA_PATH=data
+        ) > ".env"
+        echo [OK] .env created with default config
+    )
+) else (
+    echo [OK] .env already exists, skipped
+)
+
+:: --- Required directories ---
+if not exist "uploads\" (
+    mkdir "uploads" 2>nul
+    echo [OK] Directory created: uploads
+) else (
+    echo [OK] Directory exists: uploads
+)
+if not exist "static\" (
+    mkdir "static" 2>nul
+    echo [OK] Directory created: static
+) else (
+    echo [OK] Directory exists: static
+)
+echo.
+
 :: ==================== Virtual Environment ====================
-echo [2/5] Configuring Python virtual environment...
+echo [3/6] Configuring Python virtual environment...
 
 if not exist "venv\Scripts\activate.bat" (
     echo Virtual environment not found, creating...
@@ -57,7 +107,7 @@ call venv\Scripts\activate.bat
 echo.
 
 :: ==================== Backend Dependencies ====================
-echo [3/5] Checking backend dependencies...
+echo [4/6] Checking backend dependencies...
 
 pip show fastapi >nul 2>&1
 if %errorlevel% neq 0 (
@@ -78,7 +128,7 @@ if %errorlevel% neq 0 (
 echo.
 
 :: ==================== Frontend Dependencies ====================
-echo [4/5] Checking frontend dependencies...
+echo [5/6] Checking frontend dependencies...
 
 if not exist "frontend\node_modules\vite\" (
     echo Frontend dependencies not found, installing...
@@ -102,7 +152,7 @@ if not exist "frontend\node_modules\vite\" (
 echo.
 
 :: ==================== Start Services ====================
-echo [5/5] Starting services...
+echo [6/6] Starting services...
 echo.
 
 echo Starting backend server (http://127.0.0.1:8000)...

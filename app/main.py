@@ -38,9 +38,13 @@ PREFIX = settings.api_prefix
 for _dir in ("uploads", "static"):
     os.makedirs(_dir, exist_ok=True)
 
+# Mount static file directories
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/note_assets", StaticFiles(directory="data"), name="note_assets")
+
+# Legacy note_assets mount - only if data directory exists (for Wolai HTML export compatibility)
+if os.path.isdir(settings.notes_data_path):
+    app.mount("/note_assets", StaticFiles(directory=settings.notes_data_path), name="note_assets")
 
 app.include_router(auth.router, prefix=PREFIX)
 app.include_router(pages.router, prefix=PREFIX)
