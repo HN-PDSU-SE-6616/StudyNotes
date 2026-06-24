@@ -1,139 +1,180 @@
-﻿# ============================================================
-#   Taot Knowledge Base v2.0 - 一键启动脚本 (PowerShell)
-#   用法: powershell -ExecutionPolicy Bypass -File start.ps1
+# ============================================================
+#   Taot Knowledge Base v2.0 - One-Click Start (PowerShell)
+#   Usage: powershell -ExecutionPolicy Bypass -File start.ps1
 # ============================================================
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
-# 获取脚本所在目录作为项目根目录（所有路径基于此）
+# Get script directory as project root (all paths based on this)
 $ProjectRoot = $PSScriptRoot
 if (-not $ProjectRoot) { $ProjectRoot = Get-Location }
 
 Write-Host '============================================' -ForegroundColor Cyan
-Write-Host '  Taot Knowledge Base v2.0 - 一键启动' -ForegroundColor Cyan
+Write-Host '  Taot Knowledge Base v2.0 - One-Click Start' -ForegroundColor Cyan
 Write-Host '============================================' -ForegroundColor Cyan
 Write-Host ''
 
-# ==================== 环境检测 ====================
-Write-Host '[1/5] 检测运行环境...' -ForegroundColor Yellow
+# ==================== Environment Check ====================
+Write-Host '[1/5] Checking environment...' -ForegroundColor Yellow
 
 $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
 if (-not $pythonCmd) {
-    Write-Host '[错误] 未找到 Python，请安装 Python 3.9+' -ForegroundColor Red
-    Write-Host '        官方下载地址: https://www.python.org/downloads/' -ForegroundColor White
+    Write-Host '[ERROR] Python not found, please install Python 3.9+' -ForegroundColor Red
+    Write-Host '         Download: https://www.python.org/downloads/' -ForegroundColor White
     Write-Host ''
-    Read-Host '安装完成后，按 Enter 键继续'
+    Read-Host 'After installation, press Enter to continue'
     $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
     if (-not $pythonCmd) {
-        Write-Host '[错误] 仍未检测到 Python，脚本退出' -ForegroundColor Red
-        Read-Host '按 Enter 键退出'
+        Write-Host '[ERROR] Python still not found, exiting' -ForegroundColor Red
+        Read-Host 'Press Enter to exit'
         exit 1
     }
 }
 
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
 if (-not $nodeCmd) {
-    Write-Host '[错误] 未找到 Node.js，请安装 Node.js 18+' -ForegroundColor Red
-    Write-Host '        官方下载地址: https://nodejs.org/' -ForegroundColor White
+    Write-Host '[ERROR] Node.js not found, please install Node.js 18+' -ForegroundColor Red
+    Write-Host '         Download: https://nodejs.org/' -ForegroundColor White
     Write-Host ''
-    Read-Host '安装完成后，按 Enter 键继续'
+    Read-Host 'After installation, press Enter to continue'
     $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
     if (-not $nodeCmd) {
-        Write-Host '[错误] 仍未检测到 Node.js，脚本退出' -ForegroundColor Red
-        Read-Host '按 Enter 键退出'
+        Write-Host '[ERROR] Node.js still not found, exiting' -ForegroundColor Red
+        Read-Host 'Press Enter to exit'
         exit 1
     }
 }
 
-Write-Host '[完成] Python 和 Node.js 环境就绪' -ForegroundColor Green
+Write-Host "Python path: $($pythonCmd.Source)" -ForegroundColor Gray
+Write-Host "Python version: $($pythonCmd.Version)" -ForegroundColor Green
+Write-Host "Node.js path: $($nodeCmd.Source)" -ForegroundColor Gray
+Write-Host "Node.js version: $($nodeCmd.Version)" -ForegroundColor Green
+Write-Host '[OK] Python and Node.js ready' -ForegroundColor Green
 Write-Host ''
 
-# ==================== 虚拟环境 ====================
-Write-Host '[2/5] 配置 Python 虚拟环境...' -ForegroundColor Yellow
+# ==================== Virtual Environment ====================
+Write-Host '[2/5] Configuring Python virtual environment...' -ForegroundColor Yellow
 
 $venvPath = Join-Path $ProjectRoot 'venv'
 $activateScript = Join-Path $venvPath 'Scripts\Activate.ps1'
 
 if (-not (Test-Path $activateScript)) {
-    Write-Host '        虚拟环境不存在，正在创建...' -ForegroundColor White
-    python -m venv $venvPath
+    Write-Host "        Virtual environment not found, creating (target: $venvPath)..." -ForegroundColor White
+    Write-Host "        Command: python -m venv $venvPath" -ForegroundColor Gray
+    $venvOutput = python -m venv $venvPath 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Host '[错误] 虚拟环境创建失败' -ForegroundColor Red
-        Read-Host '按 Enter 键退出'
+        Write-Host '[ERROR] Failed to create virtual environment' -ForegroundColor Red
+        Write-Host "        Exit code: $LASTEXITCODE" -ForegroundColor Red
+        if ($venvOutput) {
+            Write-Host '        Error details:' -ForegroundColor Red
+            Write-Host $venvOutput -ForegroundColor Red
+        }
+        Write-Host '        Possible cause: Python not properly installed, insufficient permissions, or special characters in path' -ForegroundColor Yellow
+        Read-Host 'Press Enter to exit'
         exit 1
     }
-    Write-Host '[完成] 虚拟环境创建成功' -ForegroundColor Green
+    Write-Host '[OK] Virtual environment created' -ForegroundColor Green
 } else {
-    Write-Host '[完成] 虚拟环境已存在，跳过' -ForegroundColor Green
+    Write-Host "[OK] Virtual environment already exists, skipping (path: $venvPath)" -ForegroundColor Green
 }
 
 & $activateScript
 Write-Host ''
 
-# ==================== 后端依赖 ====================
-Write-Host '[3/5] 检查后端依赖...' -ForegroundColor Yellow
+# ==================== Backend Dependencies ====================
+Write-Host '[3/5] Checking backend dependencies...' -ForegroundColor Yellow
 
 $requirementsFile = Join-Path $ProjectRoot 'requirements.txt'
 $fastapiCheck = pip show fastapi 2>$null
 if (-not $fastapiCheck) {
-    Write-Host '        后端依赖未安装，正在安装...' -ForegroundColor White
-    pip install -r $requirementsFile -q
+    Write-Host "        Backend dependencies not installed, installing from $requirementsFile..." -ForegroundColor White
+    Write-Host "        Command: pip install -r $requirementsFile" -ForegroundColor Gray
+    $pipOutput = pip install -r $requirementsFile 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Host '[错误] 后端依赖安装失败' -ForegroundColor Red
-        Read-Host '按 Enter 键退出'
+        Write-Host '[ERROR] Backend dependencies installation failed' -ForegroundColor Red
+        Write-Host "        Exit code: $LASTEXITCODE" -ForegroundColor Red
+        if ($pipOutput) {
+            Write-Host '        Error details (last 20 lines):' -ForegroundColor Red
+            $errorLines = $pipOutput | Select-Object -Last 20
+            Write-Host ($errorLines -join "`n") -ForegroundColor Red
+        }
+        Write-Host '        Possible cause: Network failure, outdated pip version, or dependency version conflict' -ForegroundColor Yellow
+        Read-Host 'Press Enter to exit'
         exit 1
     }
-    Write-Host '[完成] 后端依赖安装成功' -ForegroundColor Green
+    Write-Host '[OK] Backend dependencies installed' -ForegroundColor Green
 } else {
-    Write-Host '[完成] 后端依赖已安装，跳过' -ForegroundColor Green
+    Write-Host '[OK] Backend dependencies already installed, skipping' -ForegroundColor Green
 }
 Write-Host ''
 
-# ==================== 前端依赖 ====================
-Write-Host '[4/5] 检查前端依赖...' -ForegroundColor Yellow
+# ==================== Frontend Dependencies ====================
+Write-Host '[4/5] Checking frontend dependencies...' -ForegroundColor Yellow
 
 $frontendPath = Join-Path $ProjectRoot 'frontend'
 $nodeModulesPath = Join-Path $frontendPath 'node_modules'
 
 if (-not (Test-Path $nodeModulesPath)) {
-    Write-Host '        前端依赖未安装，正在安装（可能需要几分钟）...' -ForegroundColor White
+    Write-Host "        Frontend dependencies not installed, installing (working dir: $frontendPath, may take a few minutes)..." -ForegroundColor White
+    Write-Host '        Command: npm install' -ForegroundColor Gray
     Push-Location $frontendPath
-    npm install
+    $npmOutput = npm install 2>&1
     $npmExitCode = $LASTEXITCODE
     Pop-Location
     if ($npmExitCode -ne 0) {
-        Write-Host '[错误] 前端依赖安装失败' -ForegroundColor Red
-        Read-Host '按 Enter 键退出'
+        Write-Host '[ERROR] Frontend dependencies installation failed' -ForegroundColor Red
+        Write-Host "        Exit code: $npmExitCode" -ForegroundColor Red
+        if ($npmOutput) {
+            Write-Host '        Error details (last 20 lines):' -ForegroundColor Red
+            $errorLines = $npmOutput | Select-Object -Last 20
+            Write-Host ($errorLines -join "`n") -ForegroundColor Red
+        }
+        Write-Host '        Possible cause: Network failure, Node.js version incompatible, or package.json configuration error' -ForegroundColor Yellow
+        Read-Host 'Press Enter to exit'
         exit 1
     }
-    Write-Host '[完成] 前端依赖安装成功' -ForegroundColor Green
+    Write-Host '[OK] Frontend dependencies installed' -ForegroundColor Green
 } else {
-    Write-Host '[完成] 前端依赖已安装，跳过' -ForegroundColor Green
+    Write-Host "[OK] Frontend dependencies already installed, skipping (path: $nodeModulesPath)" -ForegroundColor Green
 }
 Write-Host ''
 
-# ==================== 启动服务 ====================
-Write-Host '[5/5] 启动服务...' -ForegroundColor Yellow
+# ==================== Start Services ====================
+Write-Host '[5/5] Starting services...' -ForegroundColor Yellow
 Write-Host ''
 
-Write-Host '正在启动后端服务 (http://127.0.0.1:8000)...' -ForegroundColor White
-Start-Process powershell `
-    -ArgumentList '-NoExit', '-Command', "Write-Host 'Taot-Backend - 后端服务' -ForegroundColor Cyan; & '.\venv\Scripts\Activate.ps1'; python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000" `
-    -WorkingDirectory $ProjectRoot `
-    -WindowStyle Normal
+Write-Host 'Starting backend server (http://127.0.0.1:8000)...' -ForegroundColor White
+Write-Host "        Working directory: $ProjectRoot" -ForegroundColor Gray
+try {
+    $backendProcess = Start-Process powershell `
+        -ArgumentList '-NoExit', '-Command', "Write-Host 'Taot-Backend - Backend Service' -ForegroundColor Cyan; Write-Host 'Activating virtual environment...' -ForegroundColor Gray; & '.\venv\Scripts\Activate.ps1'; Write-Host 'Starting uvicorn (http://127.0.0.1:8000)...' -ForegroundColor Gray; python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000" `
+        -WorkingDirectory $ProjectRoot `
+        -WindowStyle Normal `
+        -PassThru
+    Write-Host "        Backend process started (PID: $($backendProcess.Id))" -ForegroundColor Green
+} catch {
+    Write-Host "[WARNING] Backend service start exception: $($_.Exception.Message)" -ForegroundColor Yellow
+}
 
-Write-Host '正在启动前端服务 (http://127.0.0.1:5173)...' -ForegroundColor White
-Start-Process powershell `
-    -ArgumentList '-NoExit', '-Command', "Write-Host 'Taot-Frontend - 前端服务' -ForegroundColor Cyan; npm run dev" `
-    -WorkingDirectory $frontendPath `
-    -WindowStyle Normal
+Write-Host 'Starting frontend server (http://127.0.0.1:5173)...' -ForegroundColor White
+Write-Host "        Working directory: $frontendPath" -ForegroundColor Gray
+try {
+    $frontendProcess = Start-Process powershell `
+        -ArgumentList '-NoExit', '-Command', "Write-Host 'Taot-Frontend - Frontend Service' -ForegroundColor Cyan; npm run dev" `
+        -WorkingDirectory $frontendPath `
+        -WindowStyle Normal `
+        -PassThru
+    Write-Host "        Frontend process started (PID: $($frontendProcess.Id))" -ForegroundColor Green
+} catch {
+    Write-Host "[WARNING] Frontend service start exception: $($_.Exception.Message)" -ForegroundColor Yellow
+}
 
 Write-Host ''
 Write-Host '============================================' -ForegroundColor Cyan
-Write-Host '  启动完成！' -ForegroundColor Green
-Write-Host '  后端:  http://127.0.0.1:8000' -ForegroundColor White
-Write-Host '  前端:  http://127.0.0.1:5173' -ForegroundColor White
+Write-Host '  Start complete!' -ForegroundColor Green
+Write-Host '  Backend:  http://127.0.0.1:8000' -ForegroundColor White
+Write-Host '  Frontend: http://127.0.0.1:5173' -ForegroundColor White
 Write-Host '============================================' -ForegroundColor Cyan
 Write-Host ''
-Write-Host '按 Enter 键关闭此窗口（后端和前端服务将继续运行）...' -ForegroundColor Yellow
+Write-Host 'Press Enter to close this window (backend and frontend will keep running)...' -ForegroundColor Yellow
 Read-Host
