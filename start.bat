@@ -80,7 +80,7 @@ echo.
 :: ==================== Frontend Dependencies ====================
 echo [4/5] Checking frontend dependencies...
 
-if not exist "frontend\node_modules\" (
+if not exist "frontend\node_modules\vite\" (
     echo Frontend dependencies not found, installing...
     echo Working directory: %cd%\frontend
     echo Command: npm install

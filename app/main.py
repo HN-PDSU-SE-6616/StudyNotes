@@ -34,6 +34,10 @@ app.add_middleware(
 
 PREFIX = settings.api_prefix
 
+# Auto-create directories that git doesn't track (for fresh clones)
+for _dir in ("uploads", "static"):
+    os.makedirs(_dir, exist_ok=True)
+
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/note_assets", StaticFiles(directory="data"), name="note_assets")

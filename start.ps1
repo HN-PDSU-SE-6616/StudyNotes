@@ -114,7 +114,10 @@ Write-Host '[4/5] Checking frontend dependencies...' -ForegroundColor Yellow
 $frontendPath = Join-Path $ProjectRoot 'frontend'
 $nodeModulesPath = Join-Path $frontendPath 'node_modules'
 
-if (-not (Test-Path $nodeModulesPath)) {
+$viteModulePath = Join-Path $frontendPath 'node_modules\vite'
+$depsInstalled = Test-Path $viteModulePath
+
+if (-not $depsInstalled) {
     Write-Host "        Frontend dependencies not installed, installing (working dir: $frontendPath, may take a few minutes)..." -ForegroundColor White
     Write-Host '        Command: npm install' -ForegroundColor Gray
     Push-Location $frontendPath
@@ -135,7 +138,7 @@ if (-not (Test-Path $nodeModulesPath)) {
     }
     Write-Host '[OK] Frontend dependencies installed' -ForegroundColor Green
 } else {
-    Write-Host "[OK] Frontend dependencies already installed, skipping (path: $nodeModulesPath)" -ForegroundColor Green
+    Write-Host "[OK] Frontend dependencies already installed, skipping (path: $viteModulePath)" -ForegroundColor Green
 }
 Write-Host ''
 
