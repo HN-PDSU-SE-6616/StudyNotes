@@ -137,6 +137,7 @@
               @create-below="onCreateBelow(idx)"
               @insert-above="onInsertAt(idx)"
               @insert-below="onInsertAt(idx + 1)"
+              @create-image="(url) => onCreateImageBlock(idx, url)"
             />
 
             <!-- Add Block Button -->
@@ -151,22 +152,103 @@
               </button>
               <Teleport to="body">
                 <div v-if="showAddBlock" class="fixed inset-0 z-40" @click="showAddBlock = false" />
-                <div v-if="showAddBlock" ref="addBlockPopup" class="fixed z-50 w-64 bg-white rounded-xl shadow-lg border border-slate-200 py-1" :style="addBlockStyle" @click.stop>
+                <div v-if="showAddBlock" ref="addBlockPopup" class="fixed z-50 w-72 bg-white rounded-xl shadow-lg border border-slate-200 py-1 max-h-[65vh] overflow-y-auto" :style="addBlockStyle" @click.stop>
                   <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">基础块</div>
-                  <button v-for="bt in baseBlocks" :key="bt.type" class="block-menu-item" @click="addBlock(bt.type, bt.default)">
-                    <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg">{{ bt.icon }}</span>
-                    <div class="flex-1 text-left">
-                      <div class="text-sm font-medium">{{ bt.label }}</div>
-                      <div class="text-[10px] text-slate-400">{{ bt.shortcut }}</div>
+                  <!-- 段落 -->
+                  <button class="block-menu-item" @click="addBlock('paragraph', { text: '' })">
+                    <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg shrink-0">P</span>
+                    <div class="flex-1 text-left min-w-0">
+                      <div class="text-sm font-medium">段落</div>
+                      <div class="text-[10px] text-slate-400">输入文本</div>
+                    </div>
+                  </button>
+                  <!-- 标题（右侧展开）-->
+                  <div ref="addHeadingSubRef" class="relative" @mouseenter="openAddHeadingSub" @mouseleave="scheduleHideHeadingSub">
+                    <button class="block-menu-item w-full justify-between">
+                      <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg shrink-0">H</span>
+                      <div class="flex-1 text-left min-w-0">
+                        <div class="text-sm font-medium">标题</div>
+                        <div class="text-[10px] text-slate-400"># 空格 / Ctrl+1~6</div>
+                      </div>
+                      <svg class="w-4 h-4 text-slate-400 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" /></svg>
+                    </button>
+                  </div>
+                  <!-- 列表（右侧展开）-->
+                  <div ref="addListSubTrigger" class="relative" @mouseenter="openAddListSub" @mouseleave="scheduleHideListSub">
+                    <button class="block-menu-item w-full justify-between">
+                      <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg shrink-0">•</span>
+                      <div class="flex-1 text-left min-w-0">
+                        <div class="text-sm font-medium">列表</div>
+                        <div class="text-[10px] text-slate-400">- / 1. / - [ ] 空格</div>
+                      </div>
+                      <svg class="w-4 h-4 text-slate-400 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" /></svg>
+                    </button>
+                  </div>
+                  <!-- Teleport 子菜单 -->
+                  <Teleport to="body">
+                    <div v-if="showHeadingSub" class="fixed z-[60] w-40 bg-white rounded-xl shadow-lg border border-slate-200 py-1 max-h-48 overflow-y-auto" :style="addHeadingSubStyle" @mouseenter="enterAddHeadingSub" @mouseleave="showHeadingSub = false">
+                      <button v-for="lv in [1,2,3,4,5,6]" :key="'ah'+lv" class="block-menu-item" @click="addBlock('heading', { level: lv, text: '' }); showHeadingSub=false">
+                        <span class="text-xs font-mono text-slate-400 w-5">H{{ lv }}</span>
+                        <span class="text-sm">{{ ['一级','二级','三级','四级','五级','六级'][lv-1] }}标题</span>
+                      </button>
+                    </div>
+                  </Teleport>
+                  <Teleport to="body">
+                    <div v-if="showListSub" class="fixed z-[60] w-40 bg-white rounded-xl shadow-lg border border-slate-200 py-1 max-h-48 overflow-y-auto" :style="addListSubStyle" @mouseenter="enterAddListSub" @mouseleave="showListSub = false">
+                      <button class="block-menu-item" @click="addBlock('list', { ordered: false, items: [] }); showListSub=false">
+                        <span class="w-5 text-center">•</span><span class="text-sm">无序列表</span>
+                      </button>
+                      <button class="block-menu-item" @click="addBlock('list', { ordered: true, items: [] }); showListSub=false">
+                        <span class="w-5 text-center">1.</span><span class="text-sm">有序列表</span>
+                      </button>
+                      <button class="block-menu-item" @click="addBlock('list', { ordered: false, task: true, items: [] }); showListSub=false">
+                        <span class="w-5 text-center">☑</span><span class="text-sm">任务列表</span>
+                      </button>
+                    </div>
+                  </Teleport>
+                  <!-- 其他基础块 -->
+                  <button class="block-menu-item" @click="addBlock('quote', { text: '' })">
+                    <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg shrink-0">❝</span>
+                    <div class="flex-1 text-left min-w-0">
+                      <div class="text-sm font-medium">引用</div>
+                      <div class="text-[10px] text-slate-400">&gt; 空格</div>
+                    </div>
+                  </button>
+                  <button class="block-menu-item" @click="addBlock('divider', {})">
+                    <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg shrink-0">—</span>
+                    <div class="flex-1 text-left min-w-0">
+                      <div class="text-sm font-medium">分割线</div>
+                      <div class="text-[10px] text-slate-400">---</div>
+                    </div>
+                  </button>
+                  <button class="block-menu-item" @click="addBlock('code', { language: 'python', code: '' })">
+                    <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg shrink-0">&lt;/&gt;</span>
+                    <div class="flex-1 text-left min-w-0">
+                      <div class="text-sm font-medium">代码块</div>
+                      <div class="text-[10px] text-slate-400">``` 语言</div>
+                    </div>
+                  </button>
+                  <button class="block-menu-item" @click="addBlock('table', { headers: ['列1','列2'], rows: [] })">
+                    <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg shrink-0">▦</span>
+                    <div class="flex-1 text-left min-w-0">
+                      <div class="text-sm font-medium">表格</div>
+                      <div class="text-[10px] text-slate-400">| 列1 | 列2 |</div>
+                    </div>
+                  </button>
+                  <button class="block-menu-item" @click="addBlock('callout', { type: 'info', text: '高亮块内容' })">
+                    <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg shrink-0">💡</span>
+                    <div class="flex-1 text-left min-w-0">
+                      <div class="text-sm font-medium">高亮块</div>
+                      <div class="text-[10px] text-slate-400">提示/警告/成功</div>
                     </div>
                   </button>
                   <div class="my-1 border-t border-slate-100" />
                   <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">媒体与嵌入</div>
                   <button v-for="bt in mediaBlocks" :key="bt.type" class="block-menu-item" @click="addBlock(bt.type, bt.default)">
-                    <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg">{{ bt.icon }}</span>
-                    <div class="flex-1 text-left">
-                      <div class="text-sm font-medium">{{ bt.label }}</div>
-                      <div class="text-[10px] text-slate-400">{{ bt.shortcut }}</div>
+                    <span class="w-8 h-8 flex items-center justify-center bg-slate-50 rounded-lg text-lg shrink-0">{{ bt.icon }}</span>
+                    <div class="flex-1 text-left min-w-0">
+                      <div class="text-sm font-medium truncate">{{ bt.label }}</div>
+                      <div class="text-[10px] text-slate-400 truncate">{{ bt.shortcut }}</div>
                     </div>
                   </button>
                 </div>
@@ -280,6 +362,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePageStore } from '@/stores/page'
 import { pagesApi } from '@/api/pages'
+import { filesApi } from '@/api/files'
 import type { PageTreeNode, Block } from '@/types'
 import BlockRenderer from './BlockRenderer.vue'
 import PageSettingsPanel from './PageSettingsPanel.vue'
@@ -619,9 +702,175 @@ async function togglePin() {
 
 // ===== Block Operations =====
 const showAddBlock = ref(false)
+const showHeadingSub = ref(false)
+const showListSub = ref(false)
+const addHeadingSubRef = ref<HTMLElement>()
+const addListSubTrigger = ref<HTMLElement>()
+const addHeadingSubStyle = ref<Record<string, string>>({})
+const addListSubStyle = ref<Record<string, string>>({})
+let addHeadingSubTimer: ReturnType<typeof setTimeout> | null = null
+let addListSubTimer: ReturnType<typeof setTimeout> | null = null
+
+function openAddHeadingSub() {
+  // 关闭另一个
+  if (addListSubTimer) { clearTimeout(addListSubTimer); addListSubTimer = null }
+  showListSub.value = false
+  // 打开当前
+  if (addHeadingSubTimer) clearTimeout(addHeadingSubTimer)
+  const el = addHeadingSubRef.value
+  if (el) {
+    const rect = el.getBoundingClientRect()
+    addHeadingSubStyle.value = { top: `${rect.top}px`, left: `${rect.right}px` }
+  }
+  showHeadingSub.value = true
+}
+
+function scheduleHideHeadingSub() {
+  if (addHeadingSubTimer) clearTimeout(addHeadingSubTimer)
+  addHeadingSubTimer = setTimeout(() => { showHeadingSub.value = false }, 100)
+}
+
+function enterAddHeadingSub() {
+  if (addHeadingSubTimer) { clearTimeout(addHeadingSubTimer); addHeadingSubTimer = null }
+  showHeadingSub.value = true
+}
+
+function openAddListSub() {
+  // 关闭另一个
+  if (addHeadingSubTimer) { clearTimeout(addHeadingSubTimer); addHeadingSubTimer = null }
+  showHeadingSub.value = false
+  // 打开当前
+  if (addListSubTimer) clearTimeout(addListSubTimer)
+  const el = addListSubTrigger.value
+  if (el) {
+    const rect = el.getBoundingClientRect()
+    addListSubStyle.value = { top: `${rect.top}px`, left: `${rect.right}px` }
+  }
+  showListSub.value = true
+}
+
+function scheduleHideListSub() {
+  if (addListSubTimer) clearTimeout(addListSubTimer)
+  addListSubTimer = setTimeout(() => { showListSub.value = false }, 100)
+}
+
+function enterAddListSub() {
+  if (addListSubTimer) { clearTimeout(addListSubTimer); addListSubTimer = null }
+  showListSub.value = true
+}
+
 const addBlockRef = ref<HTMLElement>()
 const addBlockStyle = ref<Record<string, string>>({})
 const addBlockPopup = ref<HTMLElement>()
+
+// ===== Undo/Redo 系统 =====
+interface BlockSnapshot { blocks: Block[] }
+const undoStack = ref<BlockSnapshot[]>([])
+const redoStack = ref<BlockSnapshot[]>([])
+const MAX_UNDO = 50
+let isUndoingOrRedoing = false  // 防止并发 undo/redo
+
+/** 保存当前 blocks 快照到 undo 栈 */
+function pushUndo() {
+  if (!page.value) return
+  undoStack.value.push({ blocks: JSON.parse(JSON.stringify(page.value.blocks)) })
+  if (undoStack.value.length > MAX_UNDO) undoStack.value.shift()
+  redoStack.value = []  // 新操作清空 redo 栈
+}
+
+/** 撤回 - 先删除后更新，串行执行避免竞态 */
+async function undo() {
+  if (!page.value || undoStack.value.length === 0) return
+  if (isUndoingOrRedoing) return  // 防止并发
+  isUndoingOrRedoing = true
+  try {
+    // 保存当前状态到 redo
+    redoStack.value.push({ blocks: JSON.parse(JSON.stringify(page.value.blocks)) })
+    const snapshot = undoStack.value.pop()!
+    const oldBlocks = page.value.blocks
+    // 先恢复本地状态
+    page.value.blocks = snapshot.blocks
+
+    // ---- 差异计算（基于捕获的快照，不受后续异步影响）----
+    const oldIds = new Set(oldBlocks.map(b => b.id))
+    const newIds = new Set(snapshot.blocks.map(b => b.id))
+    const oldMap = new Map(oldBlocks.map(b => [b.id, b]))
+
+    const deleteIds: number[] = []
+    const updatePayloads: { id: number; content: unknown; type: string }[] = []
+
+    for (const id of oldIds) {
+      if (!newIds.has(id)) deleteIds.push(id)
+    }
+    for (const b of snapshot.blocks) {
+      const old = oldMap.get(b.id)
+      if (!old || old.type !== b.type || JSON.stringify(old.content) !== JSON.stringify(b.content)) {
+        updatePayloads.push({ id: b.id, content: b.content, type: b.type })
+      }
+    }
+
+    // 第一步：串行删除（每个 delete 内部会 fetchTree，不能并行）
+    for (const id of deleteIds) {
+      await pageStore.deleteBlock(id)
+    }
+    // 第二步：并行更新（内容变更互不冲突）
+    if (updatePayloads.length > 0) {
+      await Promise.all(updatePayloads.map(p =>
+        pageStore.updateBlock(p.id, { content: p.content, type: p.type })
+      ))
+    }
+
+    // 同步排序
+    const ids = snapshot.blocks.map(b => b.id)
+    await pageStore.reorderBlocks(page.value.id, ids)
+  } finally {
+    isUndoingOrRedoing = false
+  }
+}
+
+/** 恢复 - 先删除后更新，串行执行避免竞态 */
+async function redo() {
+  if (!page.value || redoStack.value.length === 0) return
+  if (isUndoingOrRedoing) return
+  isUndoingOrRedoing = true
+  try {
+    undoStack.value.push({ blocks: JSON.parse(JSON.stringify(page.value.blocks)) })
+    const snapshot = redoStack.value.pop()!
+    const oldBlocks = page.value.blocks
+    page.value.blocks = snapshot.blocks
+
+    const oldIds = new Set(oldBlocks.map(b => b.id))
+    const newIds = new Set(snapshot.blocks.map(b => b.id))
+    const oldMap = new Map(oldBlocks.map(b => [b.id, b]))
+
+    const deleteIds: number[] = []
+    const updatePayloads: { id: number; content: unknown; type: string }[] = []
+
+    for (const id of oldIds) {
+      if (!newIds.has(id)) deleteIds.push(id)
+    }
+    for (const b of snapshot.blocks) {
+      const old = oldMap.get(b.id)
+      if (!old || old.type !== b.type || JSON.stringify(old.content) !== JSON.stringify(b.content)) {
+        updatePayloads.push({ id: b.id, content: b.content, type: b.type })
+      }
+    }
+
+    for (const id of deleteIds) {
+      await pageStore.deleteBlock(id)
+    }
+    if (updatePayloads.length > 0) {
+      await Promise.all(updatePayloads.map(p =>
+        pageStore.updateBlock(p.id, { content: p.content, type: p.type })
+      ))
+    }
+
+    const ids = snapshot.blocks.map(b => b.id)
+    await pageStore.reorderBlocks(page.value.id, ids)
+  } finally {
+    isUndoingOrRedoing = false
+  }
+}
 
 const baseBlocks = [
   { type: 'paragraph', label: '段落', icon: 'P', shortcut: '输入文本', default: { text: '' } },
@@ -684,25 +933,31 @@ watch(showAddBlock, (v) => {
 
 async function addBlock(type: string, content: Record<string, unknown>) {
   if (!page.value) return
+  pushUndo()
   showAddBlock.value = false
   await pageStore.addBlock(page.value.id, type, content)
 }
 
 async function onBlockSave(blockId: number, content: Record<string, unknown>) {
+  pushUndo()
   await pageStore.updateBlock(blockId, { content })
 }
 
 async function onChangeBlockType(blockId: number, newType: string) {
+  pushUndo()
   await pageStore.updateBlock(blockId, { type: newType })
 }
 async function onBlockDelete(blockId: number) {
+  pushUndo()
   await pageStore.deleteBlock(blockId)
 }
 async function onBlockDuplicate(blockId: number) {
+  pushUndo()
   await pageStore.duplicateBlock(blockId)
 }
 async function onBlockMove(idx: number, delta: number) {
   if (!page.value) return
+  pushUndo()
   const newIdx = idx + delta
   if (newIdx < 0 || newIdx >= page.value.blocks.length) return
   const ids = page.value.blocks.map(b => b.id)
@@ -711,6 +966,7 @@ async function onBlockMove(idx: number, delta: number) {
 }
 async function onCreateBelow(idx: number) {
   if (!page.value) return
+  pushUndo()
   const newBlock = await pageStore.insertBlockAt(page.value.id, idx + 1, 'paragraph', { text: '' })
   const ids = page.value.blocks.map(b => b.id)
   await pageStore.reorderBlocks(page.value.id, ids)
@@ -723,6 +979,7 @@ async function onCreateBelow(idx: number) {
 }
 async function onInsertAt(idx: number) {
   if (!page.value) return
+  pushUndo()
   const insertIdx = Math.max(0, Math.min(idx, page.value.blocks.length))
   const newBlock = await pageStore.insertBlockAt(page.value.id, insertIdx, 'paragraph', { text: '' })
   const ids = page.value.blocks.map(b => b.id)
@@ -736,6 +993,7 @@ async function onInsertAt(idx: number) {
 }
 async function onMoveTo(fromIdx: number, toIdx: number, position: 'above' | 'below' = 'below') {
   if (!page.value || fromIdx === toIdx) return
+  pushUndo()
   const ids = page.value.blocks.map(b => b.id)
   const moved = ids.splice(fromIdx, 1)[0]
   let insertAt: number
@@ -747,6 +1005,118 @@ async function onMoveTo(fromIdx: number, toIdx: number, position: 'above' | 'bel
   ids.splice(insertAt, 0, moved)
   await pageStore.reorderBlocks(page.value.id, ids)
 }
+
+/** 在指定 Block 下方创建图片 Block */
+async function onCreateImageBlock(idx: number, url: string) {
+  if (!page.value) return
+  pushUndo()
+  const newBlock = await pageStore.insertBlockAt(page.value.id, idx + 1, 'image', { url, alt: '' })
+  await pageStore.fetchTree()
+  await nextTick()
+  const el = contentAreaRef.value?.querySelector(`[data-block-id="${newBlock.id}"]`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
+// ===== 全局键盘快捷键（Undo/Redo）=====
+function onGlobalKeydown(e: KeyboardEvent) {
+  const ctrl = e.ctrlKey || e.metaKey
+  if (ctrl && e.key === 'z' && !e.shiftKey) {
+    e.preventDefault()
+    undo()
+  } else if (ctrl && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+    e.preventDefault()
+    redo()
+  }
+}
+
+// ===== 全局剪贴板粘贴 =====
+async function onGlobalPaste(e: ClipboardEvent) {
+  if (!page.value) return
+  // 检查是否在编辑区域内的 input/textarea 中（块编辑模式已在 BlockRenderer 中处理）
+  const activeEl = document.activeElement
+  if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) return
+
+  // 先检查图片
+  const items = e.clipboardData?.items
+  if (items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.type.startsWith('image/')) {
+        e.preventDefault()
+        const blob = item.getAsFile()
+        if (blob) {
+          try {
+            const file = new File([blob], `paste-${Date.now()}.png`, { type: blob.type || 'image/png' })
+            const { data } = await filesApi.upload(file)
+            if (data.url) {
+              pushUndo()
+              await pageStore.addBlock(page.value.id, 'image', { url: data.url, alt: '' })
+            }
+          } catch { /* ignore */ }
+          return
+        }
+      }
+    }
+  }
+
+  // 文本粘贴
+  const text = e.clipboardData?.getData('text/plain')
+  if (!text || !text.trim()) return
+
+  // 检测 file:// 协议
+  const fileMatch = text.trim().match(/^file:\/\/(.+)$/i)
+  if (fileMatch) {
+    e.preventDefault()
+    const filePath = decodeURIComponent(fileMatch[1]).replace(/^\/+/, '')
+    const fileName = filePath.split(/[\\\/]/).pop() || filePath
+    try {
+      const { data } = await pagesApi.getFileUrl(filePath)
+      if (data.url) {
+        pushUndo()
+        await pageStore.addBlock(page.value.id, 'image', { url: data.url, alt: fileName })
+        return
+      }
+    } catch {
+      // 文件不存在或无法访问，创建文本块提示
+      pushUndo()
+      await pageStore.addBlock(page.value.id, 'paragraph', { text: `📎 [${fileName}](${text.trim()})` })
+      return
+    }
+  }
+
+  // 检测 http/https URL
+  const urlMatch = text.trim().match(/^https?:\/\/.+/i)
+  if (urlMatch) {
+    e.preventDefault()
+    try {
+      const { data } = await pagesApi.getPageTitle(urlMatch[0])
+      const title = data.title || urlMatch[0]
+      pushUndo()
+      await pageStore.addBlock(page.value.id, 'paragraph', { text: `[${title}](${urlMatch[0]})` })
+    } catch {
+      pushUndo()
+      await pageStore.addBlock(page.value.id, 'paragraph', { text: text.trim() })
+    }
+    return
+  }
+
+  // 普通文本粘贴：创建段落 block
+  e.preventDefault()
+  pushUndo()
+  await pageStore.addBlock(page.value.id, 'paragraph', { text: text.trim() })
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', onGlobalKeydown)
+  document.addEventListener('paste', onGlobalPaste)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', onGlobalKeydown)
+  document.removeEventListener('paste', onGlobalPaste)
+})
 </script>
 
 <style scoped>
@@ -755,5 +1125,9 @@ async function onMoveTo(fromIdx: number, toIdx: number, position: 'above' | 'bel
 }
 .block-menu-item {
   @apply w-full flex items-center gap-3 px-3 py-2 hover:bg-slate-50 transition-colors text-left;
+}
+
+.sub-menu-right {
+  @apply absolute left-full top-0 w-40 bg-white rounded-xl shadow-lg border border-slate-200 py-1 ml-1 max-h-48 overflow-y-auto z-50;
 }
 </style>

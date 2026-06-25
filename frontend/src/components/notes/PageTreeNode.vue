@@ -80,58 +80,22 @@
             <div class="my-1 border-t border-slate-100" />
 
             <!-- 移动到 -->
-            <div class="relative" @mouseenter="showMoveTo = true" @mouseleave="showMoveTo = false">
-              <button class="menu-item w-full justify-between">
-                <span class="flex items-center gap-2.5">
-                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7.5L7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" /></svg>
-                  <span>移动到</span>
-                </span>
-                <svg class="w-3 h-3 text-slate-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" /></svg>
-              </button>
-              <!-- 子菜单：选择目标父页面 -->
-              <div v-if="showMoveTo" class="sub-menu">
-                <button class="menu-item text-xs" @click="action('move', null)">
-                  <span>📂 根目录（无父级）</span>
-                </button>
-                <div class="my-0.5 border-t border-slate-50" />
-                <button
-                  v-for="p in siblingPages"
-                  :key="'move-' + p.id"
-                  class="menu-item text-xs"
-                  @click="action('move', p.id)"
-                >
-                  <span>{{ p.icon || '📄' }} {{ p.title }}</span>
-                </button>
-                <div v-if="siblingPages.length === 0" class="px-3 py-2 text-xs text-slate-400">
-                  没有其他页面
-                </div>
-              </div>
-            </div>
+            <button class="menu-item w-full justify-between" @click="openPopup('move')">
+              <span class="flex items-center gap-2.5">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7.5L7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" /></svg>
+                <span>移动到</span>
+              </span>
+              <svg class="w-3 h-3 text-slate-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" /></svg>
+            </button>
 
             <!-- 嵌入到 -->
-            <div class="relative" @mouseenter="showEmbedTo = true" @mouseleave="showEmbedTo = false">
-              <button class="menu-item w-full justify-between">
-                <span class="flex items-center gap-2.5">
-                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15a2.25 2.25 0 012.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" /></svg>
-                  <span>嵌入到</span>
-                </span>
-                <svg class="w-3 h-3 text-slate-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" /></svg>
-              </button>
-              <!-- 子菜单：选择嵌入目标页面 -->
-              <div v-if="showEmbedTo" class="sub-menu">
-                <button
-                  v-for="p in siblingPages"
-                  :key="'embed-' + p.id"
-                  class="menu-item text-xs"
-                  @click="action('embed', p.id)"
-                >
-                  <span>{{ p.icon || '📄' }} {{ p.title }}</span>
-                </button>
-                <div v-if="siblingPages.length === 0" class="px-3 py-2 text-xs text-slate-400">
-                  没有其他页面
-                </div>
-              </div>
-            </div>
+            <button class="menu-item w-full justify-between" @click="openPopup('embed')">
+              <span class="flex items-center gap-2.5">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15a2.25 2.25 0 012.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" /></svg>
+                <span>嵌入到</span>
+              </span>
+              <svg class="w-3 h-3 text-slate-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" /></svg>
+            </button>
 
             <div class="my-1 border-t border-slate-100" />
 
@@ -178,6 +142,53 @@
               <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" /></svg>
               <span>删除</span>
             </button>
+          </div>
+        </Teleport>
+
+        <!-- 选择目标页面弹窗（独立 Teleport，不受 menuOpen 影响）-->
+        <Teleport to="body">
+          <div v-if="pageSelectOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" @click.self="closePopup">
+            <div class="bg-white rounded-2xl p-5 w-[440px] shadow-xl max-h-[75vh] flex flex-col">
+              <h3 class="text-base font-semibold text-slate-800 mb-3">{{ popupMode === 'move' ? '移动到' : '嵌入到' }}</h3>
+              <div class="relative mb-3">
+                <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                <input v-model="pageSearch" class="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500" placeholder="搜索页面..." />
+              </div>
+              <div class="flex-1 overflow-y-auto -mx-1">
+                <!-- 搜索模式：扁平列表 -->
+                <template v-if="pageSearch.trim()">
+                  <button v-for="p in popupTreeFlat" :key="p.id" class="popup-tree-item" :style="{ paddingLeft: `${p.depth * 16 + 8}px` }" @click="selectPopupPage(p.id)">
+                    <span class="shrink-0 w-4 text-center">{{ p.icon || '📄' }}</span>
+                    <span class="truncate text-sm">{{ p.title }}</span>
+                  </button>
+                  <div v-if="popupTreeFlat.length === 0" class="py-8 text-center text-sm text-slate-400">没有匹配的页面</div>
+                </template>
+                <!-- 树模式 -->
+                <template v-else>
+                  <template v-for="p in popupTreeVisible" :key="p.id">
+                    <button
+                      class="popup-tree-item"
+                      :style="{ paddingLeft: `${p.depth * 16 + 8}px` }"
+                      @click="selectPopupPage(p.id)"
+                    >
+                      <button
+                        v-if="p.hasChildren"
+                        class="w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-600 shrink-0 rounded"
+                        @click.stop="togglePopupCollapse(p.id)"
+                      >
+                        <svg class="w-3 h-3 transition-transform" :class="popupCollapsed.has(p.id) ? '' : 'rotate-90'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" /></svg>
+                      </button>
+                      <span v-else class="w-4 shrink-0" />
+                      <span class="shrink-0">{{ p.icon || '📄' }}</span>
+                      <span class="truncate text-sm">{{ p.title }}</span>
+                    </button>
+                  </template>
+                </template>
+              </div>
+              <div class="flex justify-end gap-2 mt-3 pt-3 border-t border-slate-100">
+                <button class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-xl transition-colors" @click="closePopup">取消</button>
+              </div>
+            </div>
           </div>
         </Teleport>
       </div>
@@ -320,19 +331,69 @@ function toggleMenu(e: MouseEvent) {
 }
 function closeMenu() {
   menuOpen.value = false
-  showMoveTo.value = false
-  showEmbedTo.value = false
 }
 
-// 子菜单状态
-const showMoveTo = ref(false)
-const showEmbedTo = ref(false)
+// 弹窗状态（移动到/嵌入到）
+const pageSelectOpen = ref(false)
+const popupMode = ref<'move' | 'embed'>('move')
+const pageSearch = ref('')
+const popupCollapsed = ref(new Set<number>())  // 弹窗树中折叠的节点ID
 
-// 同级页面（排除自身用于移动/嵌入）
-const siblingPages = computed(() => {
-  if (!props.allPages) return []
-  return props.allPages.filter(p => p.id !== props.node.id)
+interface FlatTreeNode { id: number; title: string; icon?: string | null; depth: number; hasChildren: boolean }
+
+/** 将树展平为带深度的列表，支持折叠 */
+function flattenPopupTree(nodes: TreeNode[], depth: number, collapsed: Set<number>, out: FlatTreeNode[]) {
+  for (const n of nodes) {
+    const hasChildren = (n.children?.length ?? 0) + (n.linked_children?.length ?? 0) > 0
+    out.push({ id: n.id, title: n.title, icon: n.icon, depth, hasChildren })
+    if (!collapsed.has(n.id)) {
+      if (n.children) flattenPopupTree(n.children, depth + 1, collapsed, out)
+      if (n.linked_children) flattenPopupTree(n.linked_children, depth + 1, collapsed, out)
+    }
+  }
+}
+
+/** 树模式下可展开的扁平列表 */
+const popupTreeVisible = computed(() => {
+  const out: FlatTreeNode[] = []
+  flattenPopupTree(props.allPages || [], 0, popupCollapsed.value, out)
+  return out
 })
+
+/** 搜索模式下匹配的扁平列表 */
+const popupTreeFlat = computed(() => {
+  const q = pageSearch.value.toLowerCase().trim()
+  if (!q) return []
+  return popupTreeVisible.value.filter(p => p.title.toLowerCase().includes(q))
+})
+
+function togglePopupCollapse(nodeId: number) {
+  const next = new Set(popupCollapsed.value)
+  if (next.has(nodeId)) next.delete(nodeId)
+  else next.add(nodeId)
+  popupCollapsed.value = next
+}
+
+function openPopup(mode: 'move' | 'embed') {
+  closeMenu()
+  popupMode.value = mode
+  pageSearch.value = ''
+  popupCollapsed.value = new Set()  // 默认全部展开
+  pageSelectOpen.value = true
+}
+
+function closePopup() {
+  pageSelectOpen.value = false
+}
+
+function selectPopupPage(targetId: number) {
+  closePopup()
+  if (popupMode.value === 'move') {
+    emit('action', 'move', { pageId: props.node.id, parentId: targetId, title: props.node.title })
+  } else {
+    emit('action', 'embed', { pageId: props.node.id, targetId })
+  }
+}
 
 // ===== 拖拽排序与嵌入 =====
 const isDragging = ref(false)
@@ -409,17 +470,17 @@ function handleClick() {
   }
 }
 
-async function action(type: string, targetId?: number | null) {
+async function action(type: string, targetId?: number | null, position?: string) {
   closeMenu()
   switch (type) {
     case 'open':
       emit('select', props.node.id)
       break
     case 'move':
-      emit('action', 'move', { pageId: props.node.id, parentId: targetId ?? null })
+      emit('action', 'move', { pageId: props.node.id, parentId: targetId ?? null, title: props.node.title })
       break
     case 'embed':
-      emit('action', 'embed', { pageId: props.node.id, targetId })
+      emit('action', 'embed', { pageId: props.node.id, targetId, position: position || 'bottom' })
       break
     case 'copyLink': {
       const url = `${window.location.origin}/notes/${props.node.slug}`
@@ -468,6 +529,10 @@ function cancelRename() {
 <style scoped>
 .menu-item {
   @apply w-full flex items-center gap-2.5 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left;
+}
+
+.popup-tree-item {
+  @apply w-full flex items-center gap-1.5 px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left rounded;
 }
 
 .sub-menu {

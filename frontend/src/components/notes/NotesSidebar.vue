@@ -116,7 +116,7 @@
     <input
       ref="fileInput"
       type="file"
-      accept=".md,.html,.htm"
+      accept=".md,.html,.htm,.txt,.csv,.log,.py,.js,.jsx,.ts,.tsx,.css,.scss,.less,.java,.c,.cpp,.h,.go,.rs,.rb,.php,.r,.swift,.json,.yaml,.yml,.xml,.sql,.sh,.bash,.bat,.ps1,.ini,.cfg,.conf,.xlsx,.xls,.docx,.pdf,.pptx,.ppt,.xmind,.png,.jpg,.jpeg,.gif,.webp,.svg,.bmp,.ico"
       multiple
       class="hidden"
       @change="onImportFiles"
@@ -171,6 +171,7 @@ import { ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { usePageStore } from '@/stores/page'
+import { pagesApi } from '@/api/pages'
 import type { PageTreeNode as PageTreeNodeType } from '@/types'
 import UserAvatar from '@/components/common/UserAvatar.vue'
 import PageTreeNode from './PageTreeNode.vue'
@@ -250,6 +251,28 @@ async function uploadImportFiles(fileList: FileList) {
   if (importParentId.value) {
     formData.append('parent_id', String(importParentId.value))
   }
+
+  // 单文件导入时检测重名
+  if (fileList.length === 1 && importParentId.value) {
+    const file = fileList[0]
+    const fileName = file.name
+    const title = fileName.replace(/\.[^.]+$/, '')
+    try {
+      const { data } = await pagesApi.checkDuplicate(importParentId.value, title)
+      if (data.exists) {
+        const confirmed = confirm(
+          `页面「${title}」已存在，是否覆盖该页面？\n\n点击"确定"将覆盖已有页面，点击"取消"将跳过导入。`
+        )
+        if (!confirmed) {
+          return
+        }
+        formData.append('overwrite', 'true')
+      }
+    } catch {
+      // 检查失败，继续导入
+    }
+  }
+
   for (let i = 0; i < fileList.length; i++) {
     const f = fileList[i]
     // webkitRelativePath 保留目录结构，否则用文件名
@@ -301,6 +324,13 @@ async function handleAction(type: string, payload?: Record<string, unknown>) {
       break
     case 'move':
       await pageStore.movePage(payload.pageId as number, payload.parentId as number | null)
+      // 移动到目标页面下时，在目标页面末尾添加该页面的引用链接
+      if (payload.parentId) {
+        await pageStore.addBlock(payload.parentId as number, 'page_link', {
+          page_id: payload.pageId as number,
+          title: payload.title as string || '',
+        })
+      }
       break
     case 'reorder':
       await pageStore.reorderPages(
@@ -310,11 +340,21 @@ async function handleAction(type: string, payload?: Record<string, unknown>) {
       )
       break
     case 'embed':
-      // 嵌入到：在该页面的 blocks 末尾添加一个 page_link block
-      await pageStore.addBlock(payload.targetId as number, 'page_link', {
-        page_id: payload.pageId as number,
-        title: '',
-      })
+      // 嵌入到：在该页面的 blocks 指定位置添加一个 page_link block
+      {
+        const position = (payload.position as string) || 'bottom'
+        if (position === 'top') {
+          await pageStore.insertBlockAt(payload.targetId as number, 0, 'page_link', {
+            page_id: payload.pageId as number,
+            title: '',
+          })
+        } else {
+          await pageStore.addBlock(payload.targetId as number, 'page_link', {
+            page_id: payload.pageId as number,
+            title: '',
+          })
+        }
+      }
       break
     case 'duplicate':
       await pageStore.duplicatePage(payload.pageId as number)

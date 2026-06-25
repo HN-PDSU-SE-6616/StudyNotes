@@ -23,6 +23,20 @@ export const pagesApi = {
   syncLinkBlocks: (pageId: number) => api.post(`/pages/${pageId}/sync-link-blocks`),
 
   search: (q: string) => api.get('/pages/search', { params: { q } }),
+
+  // 检查重名页面
+  checkDuplicate: (parentId: number, title: string) =>
+    api.get<{ exists: boolean; page_id: number | null }>('/pages/check-duplicate', {
+      params: { parent_id: parentId, title },
+    }),
+
+  // file:// 路径上传
+  getFileUrl: (filePath: string) =>
+    api.post<{ url: string; filename: string }>('/pages/upload-local-file', { file_path: filePath }),
+
+  // 获取网页标题
+  getPageTitle: (url: string) =>
+    api.post<{ title: string }>('/pages/fetch-page-title', { url }),
 }
 
 export const blocksApi = {

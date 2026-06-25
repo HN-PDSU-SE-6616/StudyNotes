@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -1400,13 +1401,536 @@ async def _fix_page_links(
         await session.commit()
 
 
-# ---- 导入端点 ----
+# ---- 通用文件类型解析 ----
+
+# 代码文件扩展名 → highlight.js 语言映射
+CODE_EXT_TO_LANG: dict[str, str] = {
+    '.py': 'python', '.js': 'javascript', '.jsx': 'javascript',
+    '.ts': 'typescript', '.tsx': 'typescript', '.vue': 'html',
+    '.css': 'css', '.scss': 'css', '.less': 'css',
+    '.html': 'html', '.htm': 'html', '.xml': 'xml', '.svg': 'xml',
+    '.json': 'json', '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'toml',
+    '.sql': 'sql', '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash',
+    '.java': 'java', '.c': 'c', '.cpp': 'cpp', '.h': 'c', '.hpp': 'cpp',
+    '.go': 'go', '.rs': 'rust', '.rb': 'ruby', '.php': 'php',
+    '.r': 'r', '.swift': 'swift', '.kt': 'kotlin', '.scala': 'scala',
+    '.lua': 'lua', '.dart': 'dart', '.cs': 'csharp',
+    '.md': 'markdown', '.txt': 'text',
+    '.ini': 'ini', '.cfg': 'ini', '.conf': 'ini',
+    '.env': 'bash', '.gitignore': 'bash', '.dockerfile': 'dockerfile',
+    '.bat': 'bash', '.ps1': 'powershell',
+}
+
+# 文件扩展名 → 类型分类
+FILE_TYPE_MAP: dict[str, str] = {
+    '.md': 'md', '.html': 'html', '.htm': 'html',
+    '.txt': 'txt', '.csv': 'txt', '.log': 'txt',
+    '.py': 'code', '.js': 'code', '.jsx': 'code', '.ts': 'code', '.tsx': 'code',
+    '.css': 'code', '.scss': 'code', '.less': 'code',
+    '.java': 'code', '.c': 'code', '.cpp': 'code', '.h': 'code', '.hpp': 'code',
+    '.go': 'code', '.rs': 'code', '.rb': 'code', '.php': 'code',
+    '.r': 'code', '.swift': 'code', '.kt': 'code', '.scala': 'code',
+    '.lua': 'code', '.dart': 'code', '.cs': 'code',
+    '.sql': 'code', '.sh': 'code', '.bash': 'code', '.zsh': 'code',
+    '.json': 'code', '.yaml': 'code', '.yml': 'code', '.toml': 'code', '.xml': 'code',
+    '.ini': 'code', '.cfg': 'code', '.conf': 'code',
+    '.bat': 'code', '.ps1': 'code',
+    '.png': 'image', '.jpg': 'image', '.jpeg': 'image', '.gif': 'image',
+    '.webp': 'image', '.svg': 'image', '.bmp': 'image', '.ico': 'image',
+    '.xlsx': 'xlsx', '.xls': 'xlsx',
+    '.docx': 'docx', '.doc': 'docx',
+    '.pdf': 'pdf',
+    '.pptx': 'ppt', '.ppt': 'ppt',
+    '.xmind': 'xmind',
+}
+
+
+def _get_file_type(file_path: str) -> str:
+    """根据文件扩展名返回文件类型分类"""
+    ext = os.path.splitext(file_path)[1].lower()
+    return FILE_TYPE_MAP.get(ext, 'unknown')
+
+
+def _get_language_for_code_file(file_path: str) -> str:
+    """根据文件扩展名返回代码语言标识"""
+    ext = os.path.splitext(file_path)[1].lower()
+    return CODE_EXT_TO_LANG.get(ext, 'text')
+
+
+def _parse_generic_file_to_blocks(
+    file_path: str, content: bytes, page_id: int, user_id: int, start_order: int,
+) -> list[Block]:
+    """
+    将非 MD/HTML 文件解析为 Block 列表。
+    对于无法解析内容的文件（如 PDF、图片等），创建描述性 block 并上传源文件。
+    """
+    file_type = _get_file_type(file_path)
+    file_name = os.path.basename(file_path)
+
+    # MD 文件解析为 blocks
+    if file_type == 'md':
+        try:
+            md_text = content.decode('utf-8', errors='replace')[:50000]
+        except Exception:
+            md_text = content.decode('latin-1', errors='replace')[:50000]
+        md_text = _strip_md_toc(md_text)
+        return _parse_md_to_blocks(md_text, page_id, start_order)
+
+    # HTML 文件解析为 blocks
+    if file_type == 'html':
+        try:
+            html_text = content.decode('utf-8', errors='replace')[:50000]
+        except Exception:
+            html_text = content.decode('latin-1', errors='replace')[:50000]
+        blocks, _ = _parse_html_to_blocks_with_assets(html_text, page_id, start_order, {file_path: content}, user_id)
+        return blocks
+
+    if file_type == 'txt':
+        try:
+            text = content.decode('utf-8', errors='replace')[:50000]
+        except Exception:
+            text = content.decode('latin-1', errors='replace')[:50000]
+        return [Block(
+            page_id=page_id, type='paragraph',
+            content={'text': text},
+            sort_order=start_order,
+        )]
+
+    if file_type == 'code':
+        try:
+            code = content.decode('utf-8', errors='replace')[:50000]
+        except Exception:
+            code = content.decode('latin-1', errors='replace')[:50000]
+        lang = _get_language_for_code_file(file_path)
+        return [Block(
+            page_id=page_id, type='code',
+            content={'language': lang, 'code': code},
+            sort_order=start_order,
+        )]
+
+    if file_type == 'image':
+        # 上传图片文件到静态目录
+        user_upload_dir = STATIC_UPLOAD_ROOT / str(user_id)
+        user_upload_dir.mkdir(parents=True, exist_ok=True)
+        ext = os.path.splitext(file_name)[1].lower()
+        safe_name = f"{uuid.uuid4().hex[:8]}/{file_name}"
+        dest = user_upload_dir / safe_name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
+        url = f"/static/uploads/{user_id}/{safe_name}"
+        return [Block(
+            page_id=page_id, type='image',
+            content={'url': url, 'alt': file_name},
+            sort_order=start_order,
+        )]
+
+    if file_type == 'xlsx':
+        return _parse_xlsx_to_blocks(content, page_id, start_order, file_name, user_id)
+
+    if file_type == 'docx':
+        return _parse_docx_to_blocks(content, page_id, start_order, file_name, user_id)
+
+    if file_type == 'pdf':
+        return _parse_pdf_to_blocks(content, page_id, start_order, file_name, user_id)
+
+    if file_type == 'ppt':
+        return _parse_pptx_to_blocks(content, page_id, start_order, file_name, user_id)
+
+    if file_type == 'xmind':
+        return _parse_xmind_to_blocks(content, page_id, start_order, file_name, user_id)
+
+    # 未知类型：上传文件并创建引用
+    return _create_file_reference_block(content, page_id, user_id, start_order, file_name)
+
+
+def _create_file_reference_block(
+    content: bytes, page_id: int, user_id: int, start_order: int, file_name: str,
+) -> list[Block]:
+    """对于无法解析的文件，上传并创建引用 block"""
+    user_upload_dir = STATIC_UPLOAD_ROOT / str(user_id)
+    user_upload_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = f"{uuid.uuid4().hex[:8]}/{file_name}"
+    dest = user_upload_dir / safe_name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(content)
+    url = f"/static/uploads/{user_id}/{safe_name}"
+    return [Block(
+        page_id=page_id, type='paragraph',
+        content={'text': f"📎 [{file_name}]({url})"},
+        sort_order=start_order,
+    )]
+
+
+def _parse_xlsx_to_blocks(content: bytes, page_id: int, start_order: int, file_name: str, user_id: int = 0) -> list[Block]:
+    """解析 Excel 文件为表格 block"""
+    try:
+        import openpyxl
+        from io import BytesIO
+        wb = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
+        blocks: list[Block] = []
+        order = start_order
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            rows = list(ws.iter_rows(max_row=min(ws.max_row, 500), values_only=True))
+            if not rows:
+                continue
+            headers = [str(c) if c is not None else '' for c in rows[0]]
+            data_rows = [[str(c) if c is not None else '' for c in row] for row in rows[1:]]
+            if wb.sheetnames[0] != sheet_name:
+                blocks.append(Block(
+                    page_id=page_id, type='heading',
+                    content={'level': 2, 'text': f'工作表: {sheet_name}'},
+                    sort_order=order,
+                ))
+                order += 1
+            blocks.append(Block(
+                page_id=page_id, type='table',
+                content={'headers': headers, 'rows': data_rows},
+                sort_order=order,
+            ))
+            order += 1
+        wb.close()
+        return blocks
+    except ImportError:
+        return _create_file_reference_block(content, page_id, user_id, start_order, file_name)
+    except Exception:
+        return [Block(
+            page_id=page_id, type='callout',
+            content={'type': 'warning', 'text': f'无法解析 Excel 文件: {file_name}'},
+            sort_order=start_order,
+        )]
+
+
+def _parse_docx_to_blocks(content: bytes, page_id: int, start_order: int, file_name: str, user_id: int = 0) -> list[Block]:
+    """解析 Word 文档为段落 blocks"""
+    try:
+        from docx import Document
+        from io import BytesIO
+        doc = Document(BytesIO(content))
+        blocks: list[Block] = []
+        order = start_order
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if not text:
+                continue
+            # 检测样式作为标题
+            if para.style and para.style.name and 'Heading' in para.style.name:
+                level_str = para.style.name.replace('Heading', '').strip()
+                try:
+                    level = int(level_str) if level_str else 1
+                except ValueError:
+                    level = 1
+                blocks.append(Block(
+                    page_id=page_id, type='heading',
+                    content={'level': min(level, 6), 'text': text},
+                    sort_order=order,
+                ))
+            else:
+                blocks.append(Block(
+                    page_id=page_id, type='paragraph',
+                    content={'text': text},
+                    sort_order=order,
+                ))
+            order += 1
+            if len(blocks) >= 500:
+                break
+        return blocks
+    except ImportError:
+        return _create_file_reference_block(content, page_id, user_id, start_order, file_name)
+    except Exception:
+        return [Block(
+            page_id=page_id, type='callout',
+            content={'type': 'warning', 'text': f'无法解析 Word 文档: {file_name}'},
+            sort_order=start_order,
+        )]
+
+
+def _parse_pdf_to_blocks(content: bytes, page_id: int, start_order: int, file_name: str, user_id: int = 0) -> list[Block]:
+    """解析 PDF 文件文本内容为段落 blocks"""
+    try:
+        from PyPDF2 import PdfReader
+        from io import BytesIO
+        reader = PdfReader(BytesIO(content))
+        blocks: list[Block] = []
+        order = start_order
+        for page_num, page in enumerate(reader.pages):
+            text = page.extract_text()
+            if text and text.strip():
+                if len(reader.pages) > 1:
+                    blocks.append(Block(
+                        page_id=page_id, type='heading',
+                        content={'level': 3, 'text': f'第 {page_num + 1} 页'},
+                        sort_order=order,
+                    ))
+                    order += 1
+                # 按段落分割
+                for para in text.strip().split('\n\n'):
+                    para = para.strip()
+                    if para:
+                        blocks.append(Block(
+                            page_id=page_id, type='paragraph',
+                            content={'text': para},
+                            sort_order=order,
+                        ))
+                        order += 1
+                if len(blocks) >= 500:
+                    break
+        return blocks if blocks else _create_file_reference_block(content, page_id, user_id, start_order, file_name)
+    except ImportError:
+        return _create_file_reference_block(content, page_id, user_id, start_order, file_name)
+    except Exception:
+        return [Block(
+            page_id=page_id, type='callout',
+            content={'type': 'warning', 'text': f'无法解析 PDF 文件: {file_name}'},
+            sort_order=start_order,
+        )]
+
+
+def _parse_pptx_to_blocks(content: bytes, page_id: int, start_order: int, file_name: str, user_id: int = 0) -> list[Block]:
+    """解析 PPT 文件文本内容为段落 blocks"""
+    try:
+        from pptx import Presentation
+        from io import BytesIO
+        prs = Presentation(BytesIO(content))
+        blocks: list[Block] = []
+        order = start_order
+        for slide_num, slide in enumerate(prs.slides):
+            slide_texts: list[str] = []
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        t = para.text.strip()
+                        if t:
+                            slide_texts.append(t)
+            if slide_texts:
+                blocks.append(Block(
+                    page_id=page_id, type='heading',
+                    content={'level': 3, 'text': f'幻灯片 {slide_num + 1}'},
+                    sort_order=order,
+                ))
+                order += 1
+                for t in slide_texts:
+                    blocks.append(Block(
+                        page_id=page_id, type='paragraph',
+                        content={'text': t},
+                        sort_order=order,
+                    ))
+                    order += 1
+            if len(blocks) >= 500:
+                break
+        return blocks if blocks else _create_file_reference_block(content, page_id, user_id, start_order, file_name)
+    except ImportError:
+        return _create_file_reference_block(content, page_id, user_id, start_order, file_name)
+    except Exception:
+        return [Block(
+            page_id=page_id, type='callout',
+            content={'type': 'warning', 'text': f'无法解析 PPT 文件: {file_name}'},
+            sort_order=start_order,
+        )]
+
+
+def _parse_xmind_to_blocks(content: bytes, page_id: int, start_order: int, file_name: str, user_id: int = 0) -> list[Block]:
+    """解析 XMind 文件为大纲 blocks"""
+    try:
+        import zipfile
+        from io import BytesIO
+        import json as json_lib
+        with zipfile.ZipFile(BytesIO(content)) as zf:
+            # XMind 文件中的 content.json 包含思维导图数据
+            if 'content.json' in zf.namelist():
+                data = json_lib.loads(zf.read('content.json').decode('utf-8'))
+                blocks = _parse_xmind_json(data, page_id, start_order)
+                if blocks:
+                    return blocks
+        return _create_file_reference_block(content, page_id, user_id, start_order, file_name)
+    except ImportError:
+        return _create_file_reference_block(content, page_id, user_id, start_order, file_name)
+    except Exception:
+        return [Block(
+            page_id=page_id, type='callout',
+            content={'type': 'warning', 'text': f'无法解析 XMind 文件: {file_name}'},
+            sort_order=start_order,
+        )]
+
+
+def _parse_xmind_json(data, page_id: int, start_order: int, level: int = 1) -> list[Block]:
+    """递归解析 XMind JSON 结构"""
+    blocks: list[Block] = []
+    order = start_order
+    # XMind 数据结构多样，尝试多种格式
+    root_topic = None
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                rt = item.get('rootTopic')
+                if rt:
+                    root_topic = rt
+                    break
+    elif isinstance(data, dict):
+        root_topic = data.get('rootTopic')
+
+    if root_topic and isinstance(root_topic, dict):
+        title = root_topic.get('title', '')
+        if title:
+            blocks.append(Block(
+                page_id=page_id, type='heading',
+                content={'level': min(level, 6), 'text': str(title)},
+                sort_order=order,
+            ))
+            order += 1
+        # 递归处理子节点
+        children = root_topic.get('children', {})
+        if isinstance(children, dict):
+            attached = children.get('attached', [])
+            for child in attached:
+                if isinstance(child, dict):
+                    child_blocks = _parse_xmind_topic(child, page_id, order, level + 1)
+                    blocks.extend(child_blocks)
+                    order += len(child_blocks)
+    return blocks
+
+
+def _parse_xmind_topic(topic: dict, page_id: int, start_order: int, level: int) -> list[Block]:
+    """递归解析 XMind 主题节点"""
+    blocks: list[Block] = []
+    order = start_order
+    title = topic.get('title', '')
+    if title:
+        indent = '  ' * (level - 1)
+        blocks.append(Block(
+            page_id=page_id, type='paragraph',
+            content={'text': f'{indent}• {title}'},
+            sort_order=order,
+        ))
+        order += 1
+    children = topic.get('children', {})
+    if isinstance(children, dict):
+        attached = children.get('attached', [])
+        for child in attached:
+            if isinstance(child, dict):
+                child_blocks = _parse_xmind_topic(child, page_id, order, level + 1)
+                blocks.extend(child_blocks)
+                order += len(child_blocks)
+    return blocks
+
+
+async def _check_duplicate_child_page(session: AsyncSession, workspace_id: int, parent_id: int, title: str) -> Optional[int]:
+    """检查同一父页面下是否存在同名的子页面，返回已有页面ID或None"""
+    result = await session.execute(
+        select(Page).where(
+            Page.workspace_id == workspace_id,
+            Page.parent_id == parent_id,
+            Page.title == title,
+        )
+    )
+    existing = result.scalar_one_or_none()
+    return existing.id if existing else None
+
+
+async def _import_generic_files(
+    session: AsyncSession,
+    workspace_id: int,
+    file_map: dict[str, bytes],
+    user_id: int,
+    parent_page: Optional[Page],
+    overwrite: bool = False,
+) -> list[PageRead]:
+    """
+    导入通用文件（非 MD/HTML）：每个文件创建为独立页面。
+    目录结构保留为页面层级。
+    """
+    # 将文件按目录结构分组
+    top_files: list[tuple[str, bytes]] = []  # 顶层文件
+    sub_dirs: dict[str, dict[str, bytes]] = defaultdict(lambda: {})
+    file_icon = {'image': '🖼️', 'code': '💻', 'txt': '📄', 'xlsx': '📊', 'docx': '📝', 'pdf': '📕', 'ppt': '📽️', 'xmind': '🧠'}
+
+    for fp, content in file_map.items():
+        norm = fp.replace('\\', '/')
+        parts = norm.split('/')
+        if len(parts) == 1:
+            top_files.append((fp, content))
+        else:
+            sub_dir = parts[0]
+            sub_path = '/'.join(parts[1:])
+            sub_dirs[sub_dir][sub_path] = content
+
+    created_pages: list[PageRead] = []
+
+    # 处理顶层文件
+    for file_path, content in top_files:
+        file_name = os.path.basename(file_path)
+        title = os.path.splitext(file_name)[0]
+        file_type = _get_file_type(file_path)
+        icon = file_icon.get(file_type, '📎')
+
+        parent_id = parent_page.id if parent_page else None
+
+        # 检查重名
+        if not overwrite and parent_id:
+            dup_id = await _check_duplicate_child_page(session, workspace_id, parent_id, title)
+            if dup_id:
+                # 跳过重复文件
+                continue
+
+        new_page = Page(
+            workspace_id=workspace_id,
+            title=title,
+            icon=icon,
+            parent_id=parent_id,
+            creator_id=user_id,
+            last_editor_id=user_id,
+        )
+        session.add(new_page)
+        await session.commit()
+        await session.refresh(new_page)
+
+        blocks = _parse_generic_file_to_blocks(file_path, content, new_page.id, user_id, 0)
+        for b in blocks:
+            session.add(b)
+        await session.commit()
+        created_pages.append(PageRead.model_validate(new_page))
+
+    # 递归处理子目录
+    for dir_name, sub_files in sub_dirs.items():
+        dir_page = Page(
+            workspace_id=workspace_id,
+            title=dir_name,
+            icon='📁',
+            parent_id=parent_page.id if parent_page else None,
+            creator_id=user_id,
+            last_editor_id=user_id,
+        )
+        session.add(dir_page)
+        await session.commit()
+        await session.refresh(dir_page)
+        created_pages.append(PageRead.model_validate(dir_page))
+
+        sub_created = await _import_generic_files(
+            session, workspace_id, sub_files, user_id, dir_page, overwrite,
+        )
+        created_pages.extend(sub_created)
+
+    return created_pages
+
+
+@router.get("/check-duplicate", summary="检查页面重名")
+async def check_duplicate_page(
+    parent_id: int = Query(...),
+    title: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """检查同一父页面下是否有同名子页面"""
+    workspace = await get_user_workspace(session, current_user.id)
+    dup_id = await _check_duplicate_child_page(session, workspace.id, parent_id, title)
+    return {"exists": dup_id is not None, "page_id": dup_id}
 
 
 @router.post("/import", response_model=list[PageRead], summary="导入目录/文件到页面树")
 async def import_pages(
     files: list[UploadFile] = File(...),
     parent_id: Optional[int] = Form(None),
+    overwrite: bool = Form(False),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -1459,38 +1983,74 @@ async def import_pages(
     md_count = sum(1 for p in file_map if p.lower().endswith('.md'))
     html_count = sum(1 for p in file_map if p.lower().endswith(('.html', '.htm')))
 
+    # ---- 分离 MD/HTML 文件和通用文件 ----
+    md_html_map: dict[str, bytes] = {}
+    generic_map: dict[str, bytes] = {}
+    for fp, fc in file_map.items():
+        ft = _get_file_type(fp)
+        if ft in ('md', 'html'):
+            md_html_map[fp] = fc
+        else:
+            generic_map[fp] = fc
+
     # ---- 检测并剥离公共路径前缀 ----
-    # 当用户通过 webkitdirectory 选择目录时，所有文件共享一个顶层目录名
-    # 例如 "大数据/大数据.md", "大数据/Spark/Spark.md" → 剥离前缀 "大数据/"
-    # 这样顶层 .md 文件就能正确注入 target_page 而非创建子页面
     common_prefix = _detect_common_prefix(list(file_map.keys()))
     stripped_map: dict[str, str] = {}  # stripped_path → original_path
     if common_prefix and parent_id is not None:
         prefix_len = len(common_prefix) + 1  # +1 for trailing '/'
         tree_file_map: dict[str, bytes] = {}
+        generic_stripped: dict[str, bytes] = {}
         for path, content in file_map.items():
             norm = path.replace('\\', '/')
             if norm.startswith(common_prefix + '/'):
                 stripped = norm[prefix_len:]
             else:
                 stripped = norm
-            tree_file_map[stripped] = content
-            # 记录映射：stripped → original（用于后续 path_to_page 键补全）
+            if _get_file_type(path) in ('md', 'html'):
+                tree_file_map[stripped] = content
+            else:
+                generic_stripped[stripped] = content
             if stripped != norm:
                 stripped_map[stripped] = norm
     else:
-        tree_file_map = file_map
+        tree_file_map = md_html_map
+        generic_stripped = generic_map
 
-    # ---- 第一阶段：递归导入页面树，收集完整路径映射 ----
+    # ---- 第一阶段：处理 MD/HTML 文件（保留原有逻辑）----
     path_to_page: dict[str, PageRead] = {}
 
-    if md_count >= html_count:
-        path_to_page = await _import_md_tree(
-            session, workspace.id, tree_file_map, target_page, current_user.id,
+    # 当所有文件都在顶层（无子目录结构）时，统一用 generic 导入确保每个文件独立页面
+    has_subdirs = any('/' in fp.replace('\\', '/') for fp in tree_file_map) if tree_file_map else False
+    use_generic_for_all = not has_subdirs and len(generic_stripped) + len(tree_file_map) > 1
+
+    if use_generic_for_all:
+        # 将所有文件合并到 generic 导入
+        all_generic = dict(generic_stripped)
+        all_generic.update(tree_file_map)
+        generic_pages = await _import_generic_files(
+            session, workspace.id, all_generic, current_user.id,
+            target_page, overwrite=overwrite,
         )
-    else:
-        path_to_page = await _import_html_tree(
-            session, workspace.id, tree_file_map, current_user.id, target_page,
+        generic_stripped = {}  # 已处理
+        tree_file_map = {}  # 已处理
+    elif tree_file_map:
+        if md_count >= html_count:
+            path_to_page = await _import_md_tree(
+                session, workspace.id, tree_file_map, target_page, current_user.id,
+            )
+        else:
+            path_to_page = await _import_html_tree(
+                session, workspace.id, tree_file_map, current_user.id, target_page,
+            )
+
+    # ---- 处理通用文件（txt/xlsx/docx/pdf/图片/代码等）----
+    generic_pages: list[PageRead] = []
+    if generic_stripped:
+        # 如果有公共前缀剥离了，通用文件需用 stripped 版本
+        target_for_generic = target_page
+        generic_pages = await _import_generic_files(
+            session, workspace.id, generic_stripped, current_user.id,
+            target_for_generic, overwrite=overwrite,
         )
 
     # ---- 路径映射补全：将 stripped 键映射回 original 键 ----
@@ -1537,5 +2097,61 @@ async def import_pages(
         if p.id not in seen_ids:
             seen_ids.add(p.id)
             created.append(p)
+    for p in generic_pages:
+        if p.id not in seen_ids:
+            seen_ids.add(p.id)
+            created.append(p)
 
     return created
+
+
+class FilePathRequest(BaseModel):
+    file_path: str
+
+@router.post("/upload-local-file", summary="上传本地文件(file://路径)")
+async def upload_local_file(
+    body: FilePathRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """接收本地文件路径，读取并上传到静态目录，返回访问URL"""
+    from pydantic import BaseModel as PydBaseModel
+    file_path = body.file_path
+    # 规范化路径
+    if file_path.startswith('/'):
+        file_path = file_path[1:]
+    path_obj = Path(file_path)
+    if not path_obj.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在")
+    if not path_obj.is_file():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="路径不是文件")
+    # 读取并上传
+    content = path_obj.read_bytes()
+    user_upload_dir = STATIC_UPLOAD_ROOT / str(current_user.id)
+    user_upload_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = f"{uuid.uuid4().hex[:8]}/{path_obj.name}"
+    dest = user_upload_dir / safe_name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(content)
+    url = f"/static/uploads/{current_user.id}/{safe_name}"
+    return {"url": url, "filename": path_obj.name}
+
+
+class UrlRequest(BaseModel):
+    url: str
+
+@router.post("/fetch-page-title", summary="获取网页标题")
+async def fetch_page_title(body: UrlRequest):
+    """获取指定URL的网页标题"""
+    import re as re_mod
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(body.url)
+            html = resp.text[:10000]
+            title_match = re_mod.search(r'<title[^>]*>([^<]+)</title>', html, re_mod.IGNORECASE)
+            title = title_match.group(1).strip() if title_match else body.url
+            return {"title": title}
+    except ImportError:
+        return {"title": body.url}
+    except Exception:
+        return {"title": body.url}

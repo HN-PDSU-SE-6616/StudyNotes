@@ -16,10 +16,18 @@
     @drop.prevent="onDrop"
   >
     <!-- ===== 左侧拖拽手柄 + 操作按钮 ===== -->
-    <div class="relative shrink-0 pt-1.5" :class="{ 'opacity-0 group-hover:opacity-100': !blockMenuOpen && !isDragging }" :style="{ opacity: blockMenuOpen || isDragging ? 1 : undefined }">
+    <div
+      class="relative shrink-0 self-start w-6 h-6 mt-1.5"
+      :class="{ 'opacity-0 group-hover:opacity-100': !blockMenuOpen && !isDragging }"
+      :style="{ opacity: blockMenuOpen || isDragging ? 1 : undefined }"
+      @mousemove="onHandleMouseMove"
+      @mouseleave="onHandleMouseLeave"
+    >
       <!-- 上方插入按钮 -->
       <button
-        class="block-insert-btn block-insert-btn-top"
+        class="block-insert-btn"
+        :class="{ 'opacity-100': showTopInsert, 'opacity-0': !showTopInsert }"
+        style="top: -14px"
         title="在上方插入"
         @click.stop="$emit('insertAbove')"
       >
@@ -28,7 +36,7 @@
 
       <!-- 拖拽手柄 -->
       <button
-        class="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-colors cursor-grab active:cursor-grabbing"
+        class="absolute inset-0 w-full h-full flex items-center justify-center rounded text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-colors cursor-grab active:cursor-grabbing"
         :class="{ 'text-brand-500 bg-brand-50': isDragging }"
         title="拖拽移动 / 点击查看选项"
         draggable="true"
@@ -41,7 +49,9 @@
 
       <!-- 下方插入按钮 -->
       <button
-        class="block-insert-btn block-insert-btn-bottom"
+        class="block-insert-btn"
+        :class="{ 'opacity-100': showBottomInsert, 'opacity-0': !showBottomInsert }"
+        style="bottom: -14px"
         title="在下方插入"
         @click.stop="$emit('insertBelow')"
       >
@@ -51,35 +61,75 @@
       <!-- Block 操作下拉菜单 -->
       <Teleport to="body">
         <div v-if="blockMenuOpen" class="fixed inset-0 z-40" @click="blockMenuOpen = false" />
-        <div v-if="blockMenuOpen" ref="blockMenuPopup" class="fixed z-50 w-52 bg-white rounded-xl shadow-lg border border-slate-200 py-1" :style="blockMenuStyle" @click.stop>
+        <div v-if="blockMenuOpen" ref="blockMenuPopup" class="fixed z-50 w-56 bg-white rounded-xl shadow-lg border border-slate-200 py-1 max-h-[70vh] overflow-y-auto" :style="blockMenuStyle" @click.stop>
           <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">转换类型</div>
           <button v-for="bt in typeOptions" :key="bt.type" class="block-menu-item" @click="changeType(bt.type)">
-            <span>{{ bt.icon }}</span><span>{{ bt.label }}</span>
+            <span class="w-5 text-center">{{ bt.icon }}</span><span>{{ bt.label }}</span>
           </button>
           <div class="my-0.5 border-t border-slate-100" />
+          <!-- 标题级别（右侧展开）-->
+          <div ref="headingSubTrigger" class="relative" @mouseenter="openHeadingSubMenu" @mouseleave="scheduleHideHeadingSub">
+            <button class="block-menu-item w-full justify-between">
+              <span class="w-5 text-center text-xs font-mono text-slate-400">H</span><span>标题级别</span>
+              <svg class="w-3 h-3 text-slate-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" /></svg>
+            </button>
+          </div>
+          <!-- 列表类型（右侧展开）-->
+          <div ref="listSubTrigger" class="relative" @mouseenter="openListSubMenu" @mouseleave="scheduleHideListSub">
+            <button class="block-menu-item w-full justify-between">
+              <span class="w-5 text-center">•</span><span>列表类型</span>
+              <svg class="w-3 h-3 text-slate-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" /></svg>
+            </button>
+          </div>
+          <!-- Teleport 子菜单 -->
+          <Teleport to="body">
+            <div v-if="showHeadingSubMenu" class="fixed z-[60] w-40 bg-white rounded-xl shadow-lg border border-slate-200 py-1 max-h-48 overflow-y-auto" :style="headingSubStyle" @mouseenter="enterHeadingSubMenu" @mouseleave="showHeadingSubMenu = false">
+              <button v-for="lv in [1,2,3,4,5,6]" :key="'h'+lv" class="block-menu-item" @click="quickConvertFromMenu('heading', lv)"><span class="text-xs font-mono text-slate-400 w-5">H{{ lv }}</span><span>{{ ['一级','二级','三级','四级','五级','六级'][lv-1] }}标题</span></button>
+            </div>
+          </Teleport>
+          <Teleport to="body">
+            <div v-if="showListSubMenu" class="fixed z-[60] w-40 bg-white rounded-xl shadow-lg border border-slate-200 py-1 max-h-48 overflow-y-auto" :style="listSubStyle" @mouseenter="enterListSubMenu" @mouseleave="showListSubMenu = false">
+              <button class="block-menu-item" @click="quickConvertFromMenu('list', false)"><span class="w-5 text-center">•</span><span>无序列表</span></button>
+              <button class="block-menu-item" @click="quickConvertFromMenu('list', true)"><span class="w-5 text-center">1.</span><span>有序列表</span></button>
+              <button class="block-menu-item" @click="quickConvertFromMenu('list', false, true)"><span class="w-5 text-center">☑</span><span>任务列表</span></button>
+            </div>
+          </Teleport>
+          <div class="my-0.5 border-t border-slate-100" />
           <button class="block-menu-item" @click="$emit('duplicate')">
-            <span>📋</span><span>拷贝副本</span>
+            <span class="w-5 text-center">📋</span><span>拷贝副本</span>
           </button>
-          <button class="block-menu-item" @click="blockMenuOpen = false; showColorPicker = true">
-            <span>🎨</span><span>修改颜色</span>
+          <button class="block-menu-item" @click="showColorPicker = !showColorPicker">
+            <span class="w-5 text-center">🎨</span><span>修改字体颜色</span>
           </button>
-          <div v-if="showColorPicker" class="px-3 py-1.5 flex gap-1 flex-wrap">
-            <button v-for="c in colors" :key="c" class="w-5 h-5 rounded-full border border-slate-200" :style="{ background: c }" @click="setColor(c)" />
+          <div v-if="showColorPicker" class="px-3 py-1.5">
+            <div class="flex gap-1.5 flex-wrap">
+              <button v-for="c in colors" :key="c" class="w-6 h-6 rounded-full border-2 border-slate-200 hover:scale-110 transition-transform" :style="{ background: c }" :title="c" @click="setTextColor(c)" />
+              <button class="w-6 h-6 rounded-full border-2 border-dashed border-slate-300 flex items-center justify-center hover:scale-110 transition-transform" title="清除字体颜色" @click="setTextColor('transparent')">
+                <svg class="w-3 h-3 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
           </div>
           <button class="block-menu-item" @click="toggleCenter">
-            <span>{{ isCentered ? '📐' : '📏' }}</span>
+            <span class="w-5 text-center">{{ isCentered ? '📐' : '📏' }}</span>
             <span>{{ isCentered ? '取消居中' : '文字居中' }}</span>
           </button>
           <div class="my-0.5 border-t border-slate-100" />
+          <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">常用颜色</div>
+          <div class="px-3 py-1">
+            <div class="flex gap-1 flex-wrap">
+              <button v-for="c in textColors" :key="c.color" class="w-6 h-6 rounded-full border-2 border-slate-200 hover:scale-110 transition-transform" :style="{ background: c.color }" :title="c.name" @click="setTextColor(c.color)" />
+            </div>
+          </div>
+          <div class="my-0.5 border-t border-slate-100" />
           <button class="block-menu-item" @click="$emit('moveUp')">
-            <span>⬆️</span><span>上移</span>
+            <span class="w-5 text-center">⬆️</span><span>上移</span>
           </button>
           <button class="block-menu-item" @click="$emit('moveDown')">
-            <span>⬇️</span><span>下移</span>
+            <span class="w-5 text-center">⬇️</span><span>下移</span>
           </button>
           <div class="my-0.5 border-t border-slate-100" />
           <button class="block-menu-item text-red-600 hover:bg-red-50" @click="$emit('delete')">
-            <span>🗑️</span><span>删除</span>
+            <span class="w-5 text-center">🗑️</span><span>删除</span>
           </button>
         </div>
       </Teleport>
@@ -327,7 +377,13 @@
       </div>
 
       <!-- 分割线 -->
-      <hr v-else-if="block.type === 'divider'" class="my-4 border-slate-200" />
+      <hr
+        v-else-if="block.type === 'divider'"
+        class="my-4 border-slate-300 cursor-pointer hover:border-brand-300 transition-colors"
+        :class="dividerClass"
+        @click="toggleDividerStyle"
+        :title="'分割线 (' + (dividerStyleName) + ')，点击切换样式'"
+      />
 
       <!-- 页面链接 -->
       <div
@@ -352,9 +408,10 @@
             ref="inputRef"
             v-model="editText"
             class="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-brand-400"
-            placeholder="输入图片URL..."
+            placeholder="输入图片URL或粘贴图片..."
             @keydown.enter.prevent="onEnterInEdit"
             @keydown.escape="cancelEdit"
+            @paste="onPaste"
             @blur="saveEdit"
           />
         </div>
@@ -450,6 +507,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, watch, type Ref } from 'vue'
 import type { Block, PageTreeNode, TableBlockContent } from '@/types'
+import { filesApi } from '@/api/files'
 import hljs from 'highlight.js'
 import python from 'highlight.js/lib/languages/python'
 import bash from 'highlight.js/lib/languages/bash'
@@ -504,6 +562,7 @@ const emit = defineEmits<{
   createBelow: []
   insertAbove: []
   insertBelow: []
+  createImage: [url: string]
   moveTo: [sourceIndex: number, targetIndex: number, position: 'above' | 'below']
 }>()
 
@@ -690,6 +749,20 @@ const linkTitle = computed(() => String(props.block.content.title || ''))
 const pageId = computed(() => Number(props.block.content.page_id || 0))
 const isCentered = computed(() => Boolean(props.block.content.centered))
 const bgColor = computed(() => String(props.block.content.bg_color || ''))
+const textColor = computed(() => String(props.block.content.text_color || ''))
+const dividerStyle = computed(() => String(props.block.content.divider_style || 'solid'))
+const dividerClass = computed(() => {
+  const s = dividerStyle.value
+  if (s === 'dashed') return 'border-dashed'
+  if (s === 'dotted') return 'border-dotted'
+  return 'border-solid'
+})
+const dividerStyleName = computed(() => {
+  const s = dividerStyle.value
+  if (s === 'dashed') return '虚线'
+  if (s === 'dotted') return '点线'
+  return '实线'
+})
 const imageUrl = computed(() => String(props.block.content.url || ''))
 const imageAlt = computed(() => String(props.block.content.alt || ''))
 const isTask = computed(() => Boolean(props.block.content.task))
@@ -712,6 +785,7 @@ const blockStyle = computed(() => {
   const style: Record<string, string> = {}
   if (isCentered.value) style.textAlign = 'center'
   if (bgColor.value) style.background = bgColor.value
+  if (textColor.value) style.color = textColor.value
   return style
 })
 
@@ -741,6 +815,88 @@ const blockMenuStyle = ref<Record<string, string>>({})
 const blockMenuPopup = ref<HTMLElement>()
 const showColorPicker = ref(false)
 
+// 插入按钮单向显示
+const showTopInsert = ref(false)
+const showBottomInsert = ref(false)
+const showHeadingSubMenu = ref(false)
+const showListSubMenu = ref(false)
+const headingSubTrigger = ref<HTMLElement>()
+const listSubTrigger = ref<HTMLElement>()
+const headingSubStyle = ref<Record<string, string>>({})
+const listSubStyle = ref<Record<string, string>>({})
+let headingSubTimer: ReturnType<typeof setTimeout> | null = null
+let listSubTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 关闭所有子菜单（用于菜单关闭时清理） */
+function closeAllSubMenus() {
+  if (headingSubTimer) { clearTimeout(headingSubTimer); headingSubTimer = null }
+  if (listSubTimer) { clearTimeout(listSubTimer); listSubTimer = null }
+  showHeadingSubMenu.value = false
+  showListSubMenu.value = false
+}
+
+function openHeadingSubMenu() {
+  // 关闭另一个子菜单
+  if (listSubTimer) { clearTimeout(listSubTimer); listSubTimer = null }
+  showListSubMenu.value = false
+  // 打开当前
+  if (headingSubTimer) clearTimeout(headingSubTimer)
+  const el = headingSubTrigger.value
+  if (el) {
+    const rect = el.getBoundingClientRect()
+    headingSubStyle.value = { top: `${rect.top}px`, left: `${rect.right}px` }
+  }
+  showHeadingSubMenu.value = true
+}
+
+function scheduleHideHeadingSub() {
+  if (headingSubTimer) clearTimeout(headingSubTimer)
+  headingSubTimer = setTimeout(() => { showHeadingSubMenu.value = false }, 100)
+}
+
+/** 从子菜单进入时立即清除延迟 */
+function enterHeadingSubMenu() {
+  if (headingSubTimer) { clearTimeout(headingSubTimer); headingSubTimer = null }
+  showHeadingSubMenu.value = true
+}
+
+function openListSubMenu() {
+  // 关闭另一个子菜单
+  if (headingSubTimer) { clearTimeout(headingSubTimer); headingSubTimer = null }
+  showHeadingSubMenu.value = false
+  // 打开当前
+  if (listSubTimer) clearTimeout(listSubTimer)
+  const el = listSubTrigger.value
+  if (el) {
+    const rect = el.getBoundingClientRect()
+    listSubStyle.value = { top: `${rect.top}px`, left: `${rect.right}px` }
+  }
+  showListSubMenu.value = true
+}
+
+function scheduleHideListSub() {
+  if (listSubTimer) clearTimeout(listSubTimer)
+  listSubTimer = setTimeout(() => { showListSubMenu.value = false }, 100)
+}
+
+function enterListSubMenu() {
+  if (listSubTimer) { clearTimeout(listSubTimer); listSubTimer = null }
+  showListSubMenu.value = true
+}
+
+function onHandleMouseMove(e: MouseEvent) {
+  const el = e.currentTarget as HTMLElement
+  const rect = el.getBoundingClientRect()
+  const midY = rect.top + rect.height / 2
+  showTopInsert.value = e.clientY < midY
+  showBottomInsert.value = e.clientY >= midY
+}
+
+function onHandleMouseLeave() {
+  showTopInsert.value = false
+  showBottomInsert.value = false
+}
+
 const typeOptions = [
   { type: 'paragraph', label: '段落 ¶', icon: '¶' },
   { type: 'heading', label: '标题 H', icon: 'H' },
@@ -754,9 +910,30 @@ const typeOptions = [
   { type: 'page_link', label: '页面链接 🔗', icon: '🔗' },
 ]
 
-const colors = ['#fef3c7', '#dbeafe', '#dcfce7', '#fce7f3', '#f3e8ff', '#e0f2fe', '#fff7ed', '#f1f5f9']
+const colors = [
+  '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899',
+  '#fef3c7', '#fde68a', '#dbeafe', '#bfdbfe', '#dcfce7', '#bbf7d0', '#fce7f3', '#fbcfe8',
+  '#f3e8ff', '#ddd6fe', '#e0f2fe', '#bae6fd', '#fff7ed', '#fed7aa', '#f1f5f9', '#e2e8f0',
+]
+
+// 常用文字颜色
+const textColors = [
+  { name: '红色', color: '#dc2626' },
+  { name: '橙色', color: '#ea580c' },
+  { name: '黄色', color: '#ca8a04' },
+  { name: '绿色', color: '#16a34a' },
+  { name: '青色', color: '#0891b2' },
+  { name: '蓝色', color: '#2563eb' },
+  { name: '紫色', color: '#7c3aed' },
+  { name: '粉色', color: '#db2777' },
+  { name: '墨绿', color: '#0d9488' },
+  { name: '默认', color: 'transparent' },
+]
 
 function toggleBlockMenu(e: MouseEvent) {
+  if (blockMenuOpen.value) {
+    closeAllSubMenus()
+  }
   blockMenuOpen.value = !blockMenuOpen.value
   if (!blockMenuOpen.value) return
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -778,9 +955,23 @@ function setColor(color: string) {
   emit('save', { ...props.block.content, bg_color: color === 'transparent' ? '' : color })
 }
 
+/** 设置文字颜色 */
+function setTextColor(color: string) {
+  blockMenuOpen.value = false
+  emit('save', { ...props.block.content, text_color: color === 'transparent' ? '' : color })
+}
+
 function toggleCenter() {
   blockMenuOpen.value = false
   emit('save', { ...props.block.content, centered: !isCentered.value })
+}
+
+/** 切换分割线样式：实线→虚线→点线→实线 */
+function toggleDividerStyle() {
+  const styles = ['solid', 'dashed', 'dotted']
+  const cur = dividerStyle.value
+  const nextIdx = (styles.indexOf(cur) + 1) % styles.length
+  emit('save', { ...props.block.content, divider_style: styles[nextIdx] })
 }
 
 // ===== 右键菜单 =====
@@ -800,6 +991,29 @@ function quickConvert(type: string, extra?: number | boolean) {
   else if (type === 'list') {
     content.ordered = extra ?? false
     content.items = text.value ? [text.value] : []
+    delete content.text
+  }
+  emit('save', content)
+  if (type !== props.block.type) {
+    emit('changeType', type)
+  }
+}
+
+/** 从 Block 菜单中快速转换（标题级别、列表类型等） */
+function quickConvertFromMenu(type: string, extra?: number | boolean, task?: boolean) {
+  blockMenuOpen.value = false
+  const content: Record<string, unknown> = { ...props.block.content }
+  if (type === 'heading') {
+    content.level = extra ?? 2
+  } else if (type === 'list') {
+    content.ordered = extra ?? false
+    if (task) {
+      content.task = true
+      content.items = text.value ? [{ text: text.value, checked: false }] : []
+    } else {
+      delete content.task
+      content.items = text.value ? [text.value] : []
+    }
     delete content.text
   }
   emit('save', content)
@@ -870,9 +1084,48 @@ function syncCodeScroll() {
   }
 }
 
-/** 粘贴后触发 autoResize，确保输入框高度适配粘贴内容 */
-function onPaste() {
+/** 粘贴后触发 autoResize，并处理剪贴板图片粘贴 */
+function onPaste(e: ClipboardEvent) {
+  // 检查剪贴板中是否有图片
+  const items = e.clipboardData?.items
+  if (items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.type.startsWith('image/')) {
+        e.preventDefault()
+        const blob = item.getAsFile()
+        if (blob) {
+          handleImagePaste(blob)
+          return
+        }
+      }
+    }
+  }
   nextTick(() => autoResize())
+}
+
+/** 处理剪贴板图片粘贴：上传并创建图片 Block */
+async function handleImagePaste(blob: Blob) {
+  try {
+    const file = new File([blob], `paste-${Date.now()}.png`, { type: blob.type || 'image/png' })
+    const { data } = await filesApi.upload(file)
+    if (data.url) {
+      // 如果当前 Block 是空段落，转换为图片 Block
+      const isEmpty = !text.value && ['paragraph', 'heading'].includes(props.block.type)
+      if (isEmpty) {
+        editing.value = false
+        emit('save', { ...props.block.content, url: data.url, alt: '' })
+        emit('changeType', 'image')
+      } else {
+        // 保存当前内容，并在下方创建新的图片 Block
+        editing.value = false
+        emit('save', { ...props.block.content, text: editText.value })
+        emit('createImage', data.url)
+      }
+    }
+  } catch {
+    // 上传失败，静默忽略
+  }
 }
 
 function saveEdit() {
@@ -1282,13 +1535,12 @@ async function toggleTaskItem(index: number) {
 
 /* 插入按钮 */
 .block-insert-btn {
-  @apply absolute left-1/2 -translate-x-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-white border border-transparent text-slate-400 hover:text-brand-500 hover:border-brand-300 hover:bg-brand-50 transition-all shadow-sm opacity-0 group-hover:opacity-100 z-10;
+  @apply absolute left-1/2 -translate-x-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-white border border-transparent text-slate-400 hover:text-brand-500 hover:border-brand-300 hover:bg-brand-50 transition-all shadow-sm z-10;
 }
-.block-insert-btn-top {
-  top: -14px;
-}
-.block-insert-btn-bottom {
-  bottom: -14px;
+
+/* 右侧展开子菜单 */
+.sub-menu-right {
+  @apply absolute left-full top-0 w-40 bg-white rounded-xl shadow-lg border border-slate-200 py-1 ml-1 max-h-48 overflow-y-auto;
 }
 
 /* 拖拽时保持操作区可见 */

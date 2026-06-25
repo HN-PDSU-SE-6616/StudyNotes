@@ -39,11 +39,24 @@
         退出登录
       </button>
     </div>
+    <!-- 退出登录二次确认弹窗 -->
+    <Teleport to="body">
+      <div v-if="showLogoutConfirm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" @click.self="showLogoutConfirm = false">
+        <div class="bg-white rounded-2xl p-6 w-96 shadow-xl">
+          <h3 class="text-lg font-semibold text-slate-800 mb-2">退出登录</h3>
+          <p class="text-sm text-slate-500 mb-6">确定要退出登录吗？</p>
+          <div class="flex justify-end gap-3">
+            <button class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-xl transition-colors" @click="showLogoutConfirm = false">取消</button>
+            <button class="px-4 py-2 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors" @click="confirmLogout">确认退出</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </aside>
 </template>
 
 <script setup lang="ts">
-import { h } from 'vue'
+import { ref, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import UserAvatar from '@/components/common/UserAvatar.vue'
@@ -75,7 +88,14 @@ function isActive(path: string) {
   return route.path.startsWith(path)
 }
 
+const showLogoutConfirm = ref(false)
+
 function handleLogout() {
+  showLogoutConfirm.value = true
+}
+
+function confirmLogout() {
+  showLogoutConfirm.value = false
   auth.logout()
   router.push('/login')
 }
