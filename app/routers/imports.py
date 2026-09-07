@@ -97,5 +97,7 @@ async def import_into_project(
         "matched_target": result.matched_target,
         "matched_doc": result.matched_doc,
         "container_note_id": result.container_note_id,
+        "target_renamed": result.target_renamed,
+        "target_title": result.target_title,
         "notes": created_notes,
     }

@@ -71,34 +71,32 @@ def test_batch_delete_ignores_invisible(client, register):
 
 
 def test_assistant_chat_proxy(client, register, monkeypatch):
+    """Agent 对话：工具循环/降级由 run_agent 承载；RuntimeError → 503 可读错误"""
     headers, _ = register("ast")
+    import app.services.agent as agent_mod
 
     captured = {}
 
-    def fake_llm(messages, base_url=None, api_key=None, model=None, temperature=0.7):
-        captured.update({"messages": messages, "base_url": base_url,
-                         "api_key": api_key, "model": model})
-        return "你好！我是测试助手。", (model or "mock-model")
+    def fake_agent(messages, base_url=None, api_key=None, model=None, temperature=0.7,
+                   tools_enabled=True, client_context=None):
+        captured.update({"messages": messages, "temperature": temperature,
+                         "tools_enabled": tools_enabled})
+        return "你好！我是测试助手。", "mock-model", False
 
-    import app.routers.assistant as assistant_router
-
-    monkeypatch.setattr(assistant_router, "llm_chat", fake_llm)
+    monkeypatch.setattr(agent_mod, "run_agent", fake_agent)
     r = client.post("/api/v1/assistant/chat", headers=headers, json={
         "messages": [{"role": "user", "content": "你好"}],
-        "base_url": "https://x/v1",
-        "api_key": "sk-test",
-        "model": "deepseek-chat",
     })
     assert r.status_code == 200, r.text
     assert r.json()["reply"] == "你好！我是测试助手。"
-    assert captured["base_url"] == "https://x/v1"
-    assert captured["api_key"] == "sk-test"
+    assert captured["tools_enabled"] is True
+    assert captured["messages"][-1]["content"] == "你好"
 
     # LLM 侧异常 → 503 可读错误
     def boom(*_a, **_k):
-        raise RuntimeError("未配置 LLM API Key：请在悬浮助手设置中填写，或在 .env 配置 LLM_API_KEY")
+        raise RuntimeError("未配置 LLM API Key：请在 .env 配置 LLM_API_KEY")
 
-    monkeypatch.setattr(assistant_router, "llm_chat", boom)
+    monkeypatch.setattr(agent_mod, "run_agent", boom)
     r2 = client.post("/api/v1/assistant/chat", headers=headers,
                      json={"messages": [{"role": "user", "content": "hi"}]})
     assert r2.status_code == 503
@@ -106,36 +104,34 @@ def test_assistant_chat_proxy(client, register, monkeypatch):
 
 
 def test_assistant_chat_stream_sse(client, register, monkeypatch):
-    """SSE 流式：逐 delta 事件下发并以 [DONE] 结束（用 yield 的生成器）"""
+    """SSE 流式：run_agent 回复分片下发并以 [DONE] 结束"""
     headers, _ = register("ast_sse")
-    import app.routers.assistant as assistant_router
+    import app.services.agent as agent_mod
 
-    def fake_stream(messages, base_url=None, api_key=None, model=None, temperature=0.7):
-        for piece in ("你", "好", "！流式回复。"):
-            yield piece
+    def fake_agent(*_a, **_k):
+        return "这是一段用于流式验证的长回复文本。", "m", False
 
-    monkeypatch.setattr(assistant_router, "llm_chat_stream", fake_stream)
+    monkeypatch.setattr(agent_mod, "run_agent", fake_agent)
     with client.stream(
         "POST", "/api/v1/assistant/chat/stream", headers=headers,
-        json={"messages": [{"role": "user", "content": "你好"}], "model": "m"},
+        json={"messages": [{"role": "user", "content": "你好"}]},
     ) as resp:
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers.get("content-type", "")
         body = "".join(resp.iter_text())
-    assert '"delta": "你"' in body
-    assert '"delta": "好"' in body
+    assert "用于流式验证" in body  # 分片回放仍能拼接出完整内容
     assert "[DONE]" in body
 
 
 def test_assistant_stream_error_event(client, register, monkeypatch):
     """流式过程 RuntimeError → 以 error 事件下发且仍 [DONE]"""
     headers, _ = register("ast_sse_e")
-    import app.routers.assistant as assistant_router
+    import app.services.agent as agent_mod
 
     def boom(*_a, **_k):
         raise RuntimeError("密钥缺失")
 
-    monkeypatch.setattr(assistant_router, "llm_chat_stream", boom)
+    monkeypatch.setattr(agent_mod, "run_agent", boom)
     with client.stream(
         "POST", "/api/v1/assistant/chat/stream", headers=headers,
         json={"messages": [{"role": "user", "content": "hi"}]},
@@ -211,3 +207,161 @@ def test_embedding_provider_configured(monkeypatch):
     assert embedding.is_configured() is True
     assert embedding.provider() == "api"
     assert embedding.dimension() == 1024  # 显式配置维度与向量库对齐
+
+
+# ================= 新增：Agent 工具 / 会话上下文 / 热缓存 / 目录导入改名 =================
+
+def test_agent_tools_registry_and_handlers(monkeypatch):
+    """工具注册表：五个内置工具、可执行、可扩展、错误安全"""
+    from app.services import tools
+
+    names = {t["function"]["name"] for t in tools.list_tools()}
+    assert {"get_weather", "get_ip", "get_system_info",
+            "fetch_web_page", "web_search"} <= names
+
+    # get_system_info(scope=client) 读取注入的浏览器环境
+    out = tools.execute_tool(
+        "get_system_info", {"scope": "client"},
+        {"client_context": {"os": "Windows 11", "cores": "16", "gpu": "ANGLE (NVIDIA)"}},
+    )
+    assert "Windows 11" in out and "NVIDIA" in out
+
+    # 未知工具 / 异常均以文本返回，不抛出
+    assert "未知工具" in tools.execute_tool("not_exist", {})
+
+    # fetch_web_page：soup4 去脚本/样式只留正文
+    html = ("<html><head><title>测试页</title></head>"
+            "<body><script>var x=1</script>"
+            "<p>正文内容段落。</p></body></html>")
+
+    class FakeResp:
+        text = html
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(tools, "_http_get", lambda *a, **k: FakeResp())
+    out2 = tools.execute_tool("fetch_web_page", {"url": "https://example.com/a"})
+    assert "标题：测试页" in out2
+    assert "正文内容段落" in out2
+    assert "var x" not in out2
+
+
+def test_agent_cache_exact_and_similar(client, register, monkeypatch):
+    """相似问题热缓存：重复/近似问题不重复调用模型；不同问题仍正常"""
+    headers, _ = register("ascache")
+    import app.services.agent as agent_mod
+
+    calls = []
+
+    def fake_agent(*_a, **_k):
+        calls.append(1)
+        return "这是缓存的回答内容。", "m", False
+
+    monkeypatch.setattr(agent_mod, "run_agent", fake_agent)
+    q1 = "帮我总结一下 FastAPI 的优缺点？"
+    r1 = client.post("/api/v1/assistant/chat", headers=headers,
+                     json={"messages": [{"role": "user", "content": q1}]}).json()
+    assert r1["reply"] == "这是缓存的回答内容。"
+    assert len(calls) == 1
+
+    # 归一化后完全相同 → 直接命中缓存，不再调模型
+    r2 = client.post("/api/v1/assistant/chat", headers=headers,
+                     json={"messages": [{"role": "user",
+                                          "content": "帮我总结一下FastAPI的优缺点"}]}).json()
+    assert r2["cached"] is True
+    assert r2["reply"] == r1["reply"]
+    assert len(calls) == 1
+
+    # 完全不同的问题 → 重新调用
+    r3 = client.post("/api/v1/assistant/chat", headers=headers,
+                     json={"messages": [{"role": "user", "content": "帮我写一个快排"}]}).json()
+    assert r3["cached"] is False
+    assert len(calls) == 2
+
+    # 相似度门控单元
+    assert agent_mod._is_similar("北京今天天气如何", "北京今天天气怎样") is True
+    assert agent_mod._is_similar("北京今天天气如何", "帮我写快速排序算法") is False
+
+
+def test_assistant_session_context_and_clear(client, register, monkeypatch):
+    """会话上下文：历史注入后续对话；context/clear 可整体清空"""
+    headers, _ = register("asctx")
+    import app.services.agent as agent_mod
+
+    sid = f"s-{uuid.uuid4().hex[:8]}"
+    seen: list[list[str]] = []
+
+    def fake_agent(messages, *a, **k):
+        seen.append([m["content"] for m in messages if m["role"] in ("user", "assistant")])
+        return f"答复{len(seen)}", "m", False
+
+    monkeypatch.setattr(agent_mod, "run_agent", fake_agent)
+
+    def ask(q: str):
+        return client.post("/api/v1/assistant/chat", headers=headers, json={
+            "messages": [{"role": "user", "content": q}], "session_id": sid,
+        }).json()
+
+    assert ask("你好介绍一下自己")["reply"] == "答复1"
+    r2 = ask("你会写代码吗")
+    assert r2["reply"] == "答复2"
+    # 第二次对话已带上第一轮历史
+    assert "你好介绍一下自己" in seen[1]
+    assert "答复1" in seen[1]
+
+    clear = client.post("/api/v1/assistant/context/clear", headers=headers,
+                        json={"session_id": sid})
+    assert clear.status_code == 200
+    r3 = ask("今天星期几")
+    assert r3["reply"] == "答复3"
+    # 清空后不再注入历史
+    assert seen[2] == ["今天星期几"]
+
+
+def test_import_dir_renames_target_page(client, register):
+    """导入目录到选中页：选中页改名为目录名并充当目录宿主（子文档成其子页、同名文档并入）"""
+    headers, _ = register("imp_rn")
+    pid = _first_pid(client, headers)
+    target = _make_leaf(client, headers, pid, None, "待导入空页")
+    folder = "《Go语言指南》"
+
+    files = {
+        f"{folder}/第一章.md": "# 第一章\n安装与第一个程序。\n".encode(),
+        f"{folder}/第二章.md": "# 第二章\n并发模型。\n".encode(),
+    }
+    r = client.post(f"/api/v1/projects/{pid}/import", headers=headers,
+                    data={"target_note_id": target["id"]},
+                    files=[("files", (p, c, "text/markdown")) for p, c in files.items()])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["target_renamed"] is True
+    assert body["target_title"] == folder
+    assert body["root_note_id"] == target["id"]
+
+    tree = client.get(f"/api/v1/projects/{pid}/notes/", headers=headers).json()
+    root = next(n for n in tree if n["id"] == target["id"])
+    assert root["title"] == folder
+    children = {c["title"] for c in (root.get("children") or [])}
+    assert children == {"第一章", "第二章"}
+
+    # 同名文档（与目录同名 .md）内容并入宿主页；其余根层文档成子页
+    target2 = _make_leaf(client, headers, pid, None, "另一个目标")
+    files2 = {
+        f"{folder}/README.md": "README 内容\n".encode(),
+        f"{folder}/{folder}.md": f"# {folder}\n同名内容\n".encode(),
+        f"{folder}/子章三.md": "子内容\n".encode(),
+    }
+    r2 = client.post(f"/api/v1/projects/{pid}/import", headers=headers,
+                     data={"target_note_id": target2["id"]},
+                     files=[("files", (p, c, "text/markdown")) for p, c in files2.items()])
+    assert r2.status_code == 200
+    b2 = r2.json()
+    assert b2["matched_target"] is True
+    assert b2["target_renamed"] is True
+    page = client.get(f"/api/v1/notes/{target2['id']}", headers=headers)
+    assert page.status_code == 200
+    detail = page.json()
+    assert detail["title"] == folder
+    texts = [blk.get("content", {}).get("text", "") for blk in (detail.get("blocks") or [])]
+    assert any("同名内容" in t for t in texts)

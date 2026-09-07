@@ -6,27 +6,33 @@ export interface ChatMsg {
 }
 
 export interface ChatOverrides {
-  base_url?: string | null
-  api_key?: string | null
-  model?: string | null
-  temperature?: number
+  session_id?: string | null
   system?: string | null
+  temperature?: number
+  tools?: boolean
+  client_context?: Record<string, string> | null
 }
 
 export const assistantApi = {
-  /** 自由对话（OpenAI 兼容，经后端代理转发；配置可覆盖后端默认） */
+  /** AI 对话（Agent：工具 + 相似问题热缓存；模型由后端 .env 配置） */
   chat: (messages: ChatMsg[], overrides: ChatOverrides = {}) =>
-    api.post<{ reply: string; model: string }>('/assistant/chat', {
-      messages,
-      base_url: overrides.base_url || null,
-      api_key: overrides.api_key || null,
-      model: overrides.model || null,
-      temperature: overrides.temperature ?? 0.7,
-      system: overrides.system || null,
-    }),
+    api.post<{ reply: string; model: string; cached?: boolean; used_tools?: boolean }>(
+      '/assistant/chat',
+      {
+        messages,
+        session_id: overrides.session_id || null,
+        system: overrides.system || null,
+        temperature: overrides.temperature ?? 0.7,
+        tools: overrides.tools ?? true,
+        client_context: overrides.client_context || null,
+      },
+    ),
+  /** 清空指定会话的服务端上下文（session_id） */
+  clearContext: (sessionId: string) =>
+    api.post<{ ok: boolean }>('/assistant/context/clear', { session_id: sessionId }),
 }
 
-/** 流式对话：SSE 逐字回调；返回累计文本。异常走 onError（含服务端 error 事件）。 */
+/** 流式对话：SSE 逐字回调（tools/缓存/会话与 /chat 一致）。异常走 onError（含服务端 error 事件）。 */
 export async function streamAssistantChat(
   messages: ChatMsg[],
   overrides: ChatOverrides = {},
@@ -41,11 +47,11 @@ export async function streamAssistantChat(
     },
     body: JSON.stringify({
       messages,
-      base_url: overrides.base_url || null,
-      api_key: overrides.api_key || null,
-      model: overrides.model || null,
-      temperature: overrides.temperature ?? 0.7,
+      session_id: overrides.session_id || null,
       system: overrides.system || null,
+      temperature: overrides.temperature ?? 0.7,
+      tools: overrides.tools ?? true,
+      client_context: overrides.client_context || null,
     }),
   })
   if (!resp.ok || !resp.body) {

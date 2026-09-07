@@ -17,6 +17,8 @@ export interface ImportResponse {
   matched_target: boolean
   matched_doc?: string | null
   container_note_id?: string | null
+  target_renamed?: boolean
+  target_title?: string | null
   notes: ImportedNoteBrief[]
 }
 

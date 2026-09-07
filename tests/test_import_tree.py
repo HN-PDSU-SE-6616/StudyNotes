@@ -123,6 +123,7 @@ def test_reimport_overwrite_semantics(client, register):
 
 
 def test_import_into_target_note(client, register):
+    """导入目录到选中页：选中页改名为目录名，文档成其子页（不套容器页）"""
     headers, _user = register("imp_tgt")
     pid = _first_org_project(client, headers)
 
@@ -142,13 +143,21 @@ def test_import_into_target_note(client, register):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["root_note_id"] == note["id"]
-    # 目录名 != 选中页名：选中页下建“与目录同名”的目录容器页
-    assert body["container_note_id"]
+    # 新语义：选中页直接改名为目录名并充当目录宿主，不再套“同名容器页”
+    assert body["target_renamed"] is True
+    assert body["target_title"] == "子"
+    assert body["container_note_id"] is None
     tree = client.get(f"/api/v1/projects/{pid}/notes/", headers=headers).json()
     flat = _tree_map(tree)
-    container = flat[body["container_note_id"]]
-    assert container["title"] == "子"
-    assert container["parent_id"] == note["id"]
+    page = flat[note["id"]]
+    assert page["title"] == "子"
+    child_titles = [c["title"] for c in page.get("children") or []]
+    assert child_titles == ["一"]
+    # 文档正文落在子页而非改名后的宿主页
+    child = next(c for c in page.get("children") or [] if c["title"] == "一")
+    c_detail = client.get(f"/api/v1/notes/{child['id']}", headers=headers).json()
+    texts = "".join((b.get("content") or {}).get("text", "") for b in c_detail["blocks"])
+    assert "正文一行" in texts
 
 
 def test_import_folder_host_same_name_append_and_dedupe(client, register):
@@ -205,7 +214,7 @@ def test_import_folder_host_same_name_append_and_dedupe(client, register):
 
 
 def test_import_folder_no_same_name_keeps_target_empty(client, register):
-    """目录内无同名文档：选中页不写入任何内容，内容进入目录容器页"""
+    """目录内无同名文档：选中页改名承载目录结构（改名不追加文档内容）"""
     headers, _user = register("imp_nomatch")
     pid = _first_org_project(client, headers)
     page = client.post(
@@ -222,17 +231,22 @@ def test_import_folder_no_same_name_keeps_target_empty(client, register):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["matched_target"] is False
-    assert body["container_note_id"]
+    assert body["container_note_id"] is None
+    assert body["target_renamed"] is True
+    assert body["target_title"] == "others"
 
     detail = client.get(f"/api/v1/notes/{page['id']}", headers=headers).json()
+    assert detail["title"] == "others"  # 当前页改名为导入目录名
     body_text = "".join((b.get("content") or {}).get("text", "") for b in detail["blocks"])
-    assert "index 内容" not in body_text  # 页面保持为空
+    assert "index 内容" not in body_text  # 无同名文档 → 宿主页本身不被写入内容
 
     tree = client.get(f"/api/v1/projects/{pid}/notes/", headers=headers).json()
     flat = _tree_map(tree)
-    container = flat[body["container_note_id"]]
-    assert container["title"] == "others"
-    cont_detail = client.get(f"/api/v1/notes/{container['id']}", headers=headers).json()
+    page_node = flat[page["id"]]
+    children = page_node.get("children") or []
+    assert any(c["title"] == "index" for c in children)  # 文档成为改名页的子页
+    child = next(c for c in children if c["title"] == "index")
+    cont_detail = client.get(f"/api/v1/notes/{child['id']}", headers=headers).json()
     assert "index 内容" in "".join(
         (b.get("content") or {}).get("text", "") for b in cont_detail["blocks"]
     )

@@ -6,14 +6,11 @@
   阶段二 fill：再按稳定顺序逐文档解析并追加到归属 note——此时任意文档间链接
               的目标节点均已存在，可稳定命中（相对链接按“源文档所在目录”解析）。
 
-同名合并规则（问题 #1，用户已确认）：
-- 目标为“当前选中页 P”时，匹配导入目录根层文档中 basename(去扩展名)==P.title：
-  命中 → 内容追加到 P；未命中 → P 不写入（保持原状）。前端导入前提示规则、
-  导入后提示结果（matched_target / container_note_id）。
-- P.title == 目录名 → P 充当目录宿主（不套壳）：同名文档进 P，其它根层文档各自
-  成 P 的子页（title=文件名），子目录为 P 子页。
-- 否则在 P 下建「与目录同名」的目录容器页：容器承载根层其它文档（merge），
-  子目录为容器子页；若另有同名文档仍会追加到 P。
+同名合并规则：
+- 目标为“当前选中页 P”时（目录模式）：先把 P 改名为导入目录名并充当目录宿主——
+  与目录同名的根层文档内容并入 P，其余根层文档各自成 P 子页，子目录为 P 子树；
+  重复导入按 source_path 幂等复用/去重（target_renamed 标志本次已改名）。
+- 无目标/项目根导入：建「与目录同名」的根容器页承载整棵目录树。
 - 追加防重：note.imported_digests 记录每源文档 sha1，重复导入跳过并计入 skipped。
 
 资源：路径任一层含 image/media/img/images/assets/css/js/fonts 的文件上传为 asset
@@ -33,8 +30,8 @@ from app.models.file import FileMetadata, FileStatus
 from app.models.note import Note, NoteBlock
 from app.models.project import Project
 from app.models.user import User
-from app.services import parser as parser_service
 from app.services.note_service import purge_note_tree
+from app.services import parser as parser_service
 from app.services.storage import get_storage
 
 logger = logging.getLogger(__name__)
@@ -54,6 +51,8 @@ class ImportResult:
     matched_target: bool = False
     matched_doc: Optional[str] = None
     container_note_id: Optional[str] = None
+    target_renamed: bool = False  # 选中页已改名为导入目录名（目录宿主）
+    target_title: Optional[str] = None  # 改名后的目标页标题
 
     @property
     def all_notes(self) -> list[str]:
@@ -287,6 +286,12 @@ class _TreeImporter:
     # ---------- 目录模式（folder_mode） ----------
     async def _plan_folder(self, target: Optional[Note], folder: str,
                            docs: dict[str, bytes]) -> None:
+        """导入目录到选中页 target（folder=顶层目录名）
+
+        需求：选中“当前页面节点”导入目录时，先把当前页改名为目录名并充当目录
+        宿主（不套壳），其后走宿主正常流程——与目录同名的根层文档内容并入当前页，
+        其余根层文档各自成为其子页，子目录递归为子树。
+        """
         root_files: dict[str, bytes] = {}
         subtree: dict[str, bytes] = {}
         for rel, data in docs.items():
@@ -296,50 +301,50 @@ class _TreeImporter:
             else:
                 root_files[rel] = data
 
-        target_title = (target.title or "").strip() if target else None
-        matched_key: Optional[str] = None
-        if target is not None:
+        # 无 target：退回在项目根建「与目录同名」的容器页（根导入场景防御）
+        if target is None:
+            container = await self._ensure_note(folder, None, folder, icon="📁")
+            if container is None:
+                for rel in sorted(root_files) + sorted(subtree):
+                    self.result.skipped.append(rel)
+                return
+            self.result.container_note_id = container.id
+            self._register(folder, container)
             for rel in sorted(root_files):
-                if _stem(rel) == target_title:
-                    matched_key = rel
-                    break
+                self._register(rel, container)
+                self._assignments[rel] = root_files[rel]
+            if subtree:
+                await self._plan_level(container, folder, subtree)
+            return
+
+        # 选中页作为目录宿主：先改名与目录一致，再走宿主流程
+        target_title = (target.title or "").strip()
+        if target_title != folder:
+            target.title = folder[:200]
+            target.icon = "📁"
+            self.session.add(target)
+            self.result.target_renamed = True
+            self.result.target_title = folder[:200]
+
+        # 与目录同名的根层文档 → 内容并入宿主页（宿主=当前选中页）
+        matched_key: Optional[str] = None
+        for rel in sorted(root_files):
+            if _stem(rel) == folder:
+                matched_key = rel
+                break
         if matched_key:
             self.result.matched_target = True
             self.result.matched_doc = matched_key
-
-        host_is_target = target is not None and target_title == folder
-        if target is not None and host_is_target:
-            # 选中页即目录宿主：不套壳；同名文档计划到 P，其余根层文档各自成 P 子页
-            if matched_key:
-                self._register(matched_key, target)
-                self._assignments[matched_key] = root_files.pop(matched_key)
-            for rel in sorted(root_files):
-                child = await self._make_note(_stem(rel), target, source_path=rel)
-                self.result.created.append(child.id)
-                self._register(rel, child)
-                self._assignments[rel] = root_files[rel]
-            if subtree:
-                await self._plan_level(target, folder, subtree)
-            return
-
-        # 建「与目录同名」的容器页（parent = 选中页 或 项目根）
-        container = await self._ensure_note(folder, target, folder, icon="📁")
-        if container is None:
-            for rel in sorted(root_files) + sorted(subtree):
-                self.result.skipped.append(rel)
-            return
-        self.result.container_note_id = container.id
-        self._register(folder, container)
-        # 同名文档仍追加到选中页（非同宿主场景）
-        if matched_key and target is not None:
             self._register(matched_key, target)
             self._assignments[matched_key] = root_files.pop(matched_key)
-        # 其余根层文档合入容器页
+        # 其余根层文档各自成宿主页的子页
         for rel in sorted(root_files):
-            self._register(rel, container)
+            child = await self._make_note(_stem(rel), target, source_path=rel)
+            self.result.created.append(child.id)
+            self._register(rel, child)
             self._assignments[rel] = root_files[rel]
         if subtree:
-            await self._plan_level(container, folder, subtree)
+            await self._plan_level(target, folder, subtree)
 
     # ---------- 入口 ----------
     async def import_root(self, file_map: dict[str, bytes],

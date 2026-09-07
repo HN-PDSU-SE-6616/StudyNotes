@@ -104,6 +104,9 @@ uv run pytest -q
   `webkitRelativePath`）→ 目录结构 = Note 树；`image/media/...` 资源目录自动上传为
   asset 并改写引用；跨文档 `[x](dir/a.md)` 链接修复为 `/notes/{slug}` 跳转；
   重复导入由 `note.source_path` 幂等判定（overwrite=false 跳过 / true 重建）。
+  **导入到“当前选中页”时**：选中页直接改名为导入目录名并充当目录容器——与目录同名
+  文档内容并入该页，其余文件/子目录按结构建为其子页面（`target_renamed/target_title`
+  标志前端展示）；不再套“同名容器页”。
 - **列表块协议**：相邻同型列表合并为一个 list 块的多行 `items`，有序编号在同一块内连号；
   前端 BlockRenderer 逐行渲染（含缩进层级 indent），无 `[object Object]` 与固定 `1.` 问题。
 
@@ -118,8 +121,7 @@ uv run pytest -q
 ## 批量清理（误导入修复）
 
 - 侧栏「我的页面 → 批量删除」：多选页面（每项含其子树）批量删除；
-- 「清空此项目的全部页面」：危险操作，清空当前项目整棵笔记树（需项目 Owner/Admin）。
-- 对应接口：`POST /api/v1/notes/batch-delete`、`DELETE /api/v1/projects/{id}/notes/`。
+- 对应接口：`POST /api/v1/notes/batch-delete`（保留 `DELETE /api/v1/projects/{id}/notes/` 供运维/脚本）。
 
 ## Embedding：本地 / 远程（OpenAI 兼容）
 
@@ -136,12 +138,24 @@ EMBEDDING_DIM=1024                                      # 建议显式配置，�
 未配置或调用失败时 RAG/推荐/索引任务会给出可读错误并静默降级；Qdrant collection
 已存在但维度不一致时会明确报错，提示对齐 `EMBEDDING_DIM` 或重建 collection。
 
-## 悬浮 AI 助手（全局）
+## 悬浮 AI 助手（全局，Agent）
 
-登录后所有页面右下角悬浮球（可隐藏/找回）。面板支持：
-- 对话方式：自由对话（OpenAI 兼容，经 `POST /api/v1/assistant/chat` 代理）或知识库问答（RAG）；
-- LLM 覆盖配置：base_url / api_key / model / temperature / system prompt（存浏览器本地，随请求转发）；
-- DIY：悬浮球图案/尺寸/背景、面板背景、问候语，以及自定义 CSS/JS（作用于 `.taot-assistant-*` 类名，可做字体/动效等）。
+登录后所有页面右下角悬浮球（可隐藏/找回；默认开启漂浮特效）。面板支持：
+- 对话方式：自由对话（Agent，`POST /api/v1/assistant/chat` 与 `/chat/stream` SSE）
+  或知识库问答（RAG）；模型/密钥由后端 `.env`（`LLM_MODEL/LLM_API_KEY`）统一管理；
+- **工具函数（可扩展）**：注册表 `app/services/tools.py`，对话自动 function calling：
+  `get_weather`（open-meteo 实时天气）· `get_ip`（公网/内网 IP）·
+  `get_system_info`（服务端 + 浏览器客户端 CPU/GPU/内存，客户端参数由前端采集注入）·
+  `fetch_web_page`（httpx + BeautifulSoup4 提取网页正文）· `web_search`（DuckDuckGo）；
+  模型不支持 tools 时自动降级为普通对话；
+- **会话上下文**：`session_id` 记忆最近对话（Redis，每用户隔离），`POST /assistant/context/clear` 清空；
+- **相似问题热缓存**：同一用户重复/近似问题（归一化 + 字符 bigram/LCS 相似 ≥ 阈值）
+  直接复用回答，减少重复调用模型（流式同样命中并回放）；
+- **外观配置**：浅色/深色（黑白）主题、面板实体不透明背景、悬浮球尺寸/色板/图标
+  （预设 emoji 或本地上传图片）、创造性温度、问候语与角色 Prompt 预设；
+- **Markdown 渲染**：助手回复以 HTML 渲染（粗体/列表/引用/代码块/表格，流式中未闭合
+  代码围栏以纯文本保护），经 DOMPurify 消毒；
+- DIY：自定义 CSS/JS（作用于 `.taot-assistant-*` 类名；默认特效 CSS 示例在输入框中可见可改写）。
 
 ### Embedding 模型预设（小/中/大自行选择）
 

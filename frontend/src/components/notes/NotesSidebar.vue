@@ -87,13 +87,6 @@
         </button>
       </div>
 
-      <!-- 危险操作：清空整个项目 -->
-      <div v-if="!batchOpen && pageStore.tree.length" class="mb-2 px-2">
-        <button class="text-[11px] text-red-400 hover:text-red-600 hover:underline" @click="confirmClearProject">
-          ⚠ 清空此项目的全部页面（导入失误后整体清理）
-        </button>
-      </div>
-
       <div v-if="!pageStore.tree.length" class="text-center py-8 text-sm text-slate-400">
         <p>还没有页面</p>
         <button class="mt-2 text-brand-600 hover:underline" @click="$emit('create')">创建第一个页面</button>
@@ -162,8 +155,8 @@
           <h3 class="text-lg font-semibold text-slate-800 mb-2">导入目录/文件</h3>
           <p class="text-sm text-slate-500 mb-5">选择导入方式。目录导入会递归处理子目录结构。</p>
           <div v-if="importTargetId" class="mb-4 px-3 py-2 rounded-lg bg-brand-50 text-xs text-brand-700 leading-relaxed">
-            导入目标：当前页面。目录内若存在<b>与当前页面同名</b>的文件，内容将<b>追加</b>到该页面（重复导入会自动跳过）；
-            未找到同名文件时当前页面保持不变，其余内容按目录结构建为子页面。
+            导入目标：当前页面。导入<b>目录</b>时，当前页面将<b>改名为目录名</b>并作为目录容器：
+            与目录同名的文件内容合并进该页，其余文件/子目录按结构建为子页面（重复导入自动跳过）。
           </div>
           <div class="space-y-3">
             <button
@@ -282,14 +275,6 @@ async function confirmBatchDelete() {
   alert(msg)
 }
 
-async function confirmClearProject() {
-  const ok = window.confirm('确定清空此项目的全部页面吗？\n所有页面及其子页面将被永久删除，不可恢复。')
-  if (!ok) return
-  const { data } = await pagesApi.clearProject(pageStore.projectId())
-  await pageStore.fetchTree()
-  pageStore.currentPage = null
-  alert(`已清空：删除 ${data.deleted_roots} 棵根页面树，共 ${data.notes_removed} 个页面`)
-}
 
 
 // 文件导入
@@ -355,18 +340,19 @@ async function uploadImportFiles(fileList: FileList) {
     const targetId = importTargetId.value
     if (targetId) {
       const msgs: string[] = []
+      if (data.target_renamed) {
+        msgs.push(`✔ 当前页面已改名为「${data.target_title || ''}」并作为该目录的容器页`)
+      }
       if (data.matched_target) {
-        msgs.push(`✔ 已把同名文档「${data.matched_doc || ''}」的内容追加到当前页面`)
-      } else if (data.created.length || data.skipped.length) {
-        msgs.push('当前目录中未找到与当前页面同名的文档，当前页面保持为空')
+        msgs.push(`✔ 与目录同名文档「${data.matched_doc || ''}」的内容已合并进当前页面`)
+      } else if (data.created.length && !data.target_renamed) {
+        msgs.push('未匹配同名文档，其余内容已按目录结构建为子页面')
       }
-      if (data.container_note_id) {
-        msgs.push('目录中其余内容已导入到“与目录同名”的子页面下')
-      } else if (data.created.length && !data.matched_target) {
-        msgs.push('目录内容已按结构建为当前页面的子页面')
+      if (data.created.length && data.container_note_id === null) {
+        msgs.push(`已建立 ${data.created.length} 个页面/子目录节点`)
       }
-      if (data.skipped.length && data.skipped.length >= data.created.length) {
-        msgs.push(`已有 ${data.skipped.length} 个文件被跳过（内容已存在）`)
+      if (data.skipped.length) {
+        msgs.push(`有 ${data.skipped.length} 个文件被跳过（内容已存在，如需覆盖请重新导入）`)
       }
       if (msgs.length) alert(msgs.join('\n'))
       // 导入到已有笔记：刷新该笔记（顶层内容可能已追加）
