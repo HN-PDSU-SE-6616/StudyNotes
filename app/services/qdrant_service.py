@@ -50,8 +50,9 @@ def ensure_collections(vector_size: Optional[int] = None) -> None:
             if exist_dim and exist_dim != dim:
                 raise RuntimeError(
                     f"Qdrant collection「{name}」当前维度 {exist_dim} 与 Embedding 输出维度 "
-                    f"{dim} 不一致。请对齐 EMBEDDING_MODEL/EMBEDDING_DIM 配置，或删除 collection/清空 "
-                    f"qdrant_storage 卷后重建。"
+                    f"{dim} 不一致（换模型/换 Embedding 后需重建向量库）。请运行：\n"
+                    f"    python /app/scripts/rebuild_embeddings.py --reset --reindex\n"
+                    f"（或手动删除 collection / 清空 qdrant_storage 卷后重启）。"
                 )
 
     # kb_notes 权限/路由过滤字段索引
@@ -84,7 +85,8 @@ def upsert_note_chunks(
     client = get_client()
     points = []
     for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
-        point_id = f"{note['id']}:{i}"
+        # Qdrant point id 仅支持 uint/uuid：用确定性 UUID 表达 {note}:{chunk}
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"taot:{note['id']}:{i}"))
         payload = {
             "text": chunk.get("text", ""),
             "note_id": note["id"],

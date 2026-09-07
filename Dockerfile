@@ -46,6 +46,7 @@ RUN if [ "$ENABLE_AI" = "1" ]; then \
 
 # 后端与迁移
 COPY app/ ./app/
+COPY scripts/ ./scripts/
 COPY alembic.ini ./
 COPY alembic/ ./alembic/
 COPY wait_services.py /app/wait_services.py

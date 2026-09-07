@@ -33,12 +33,16 @@ class Settings(BaseSettings):
     storage_root: str = "storage"
 
     # --- Embedding（空值表示 RAG/推荐功能关闭） ---
-    embedding_model: str = ""
+    # 预设名（推荐）：bge-small-zh / bge-base-zh / bge-large-zh / bge-m3 /
+    # bge-small-en / bge-base-en / openai-3-small / openai-3-large；见 app/services/embedding.py PRESETS
+    embedding_preset: str = ""
     # provider: local=本地 sentence-transformers；api=OpenAI 兼容接口（SiliconFlow/OpenAI 等）
     embedding_provider: str = "local"
     embedding_base_url: str = ""
     embedding_api_key: str = ""
-    # 远程接口向量的维度；建议显式配置并与 Qdrant collection 维度对齐（默认 1024）
+    # 显式模型名：优先于 preset 推断（本地=HF 模型名/路径；api=服务端模型名）
+    embedding_model: str = ""
+    # 向量维度：建议显式配置并与 Qdrant collection 维度对齐；未配时用 preset 维度
     embedding_dim: Optional[int] = None
     # --- LLM（OpenAI 兼容接口，如 DeepSeek） ---
     llm_api_key: str = ""

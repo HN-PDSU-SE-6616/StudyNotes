@@ -145,11 +145,55 @@ def test_assistant_stream_error_event(client, register, monkeypatch):
     assert "[DONE]" in body
 
 
+def test_embedding_presets_resolution(monkeypatch):
+    """预设解析：preset 自动带入模型/维度；显式配置优先"""
+    from app.core.config import settings
+
+    # 模拟未显式配置维度（.env 可能已设 EMBEDDING_DIM）
+    monkeypatch.setattr(settings, "embedding_dim", None)
+    monkeypatch.setattr(settings, "embedding_model", "")
+    monkeypatch.setattr(settings, "embedding_preset", "bge-small-zh")
+    monkeypatch.setattr(settings, "embedding_provider", "local")
+    assert embedding.model_name() == "BAAI/bge-small-zh-v1.5"
+    assert embedding.dimension() == 512
+
+    # 中/大预设
+    monkeypatch.setattr(settings, "embedding_preset", "bge-base-zh")
+    assert embedding.model_name() == "BAAI/bge-base-zh-v1.5"
+    assert embedding.dimension() == 768
+    monkeypatch.setattr(settings, "embedding_preset", "bge-large-zh")
+    assert embedding.dimension() == 1024
+    monkeypatch.setattr(settings, "embedding_preset", "bge-m3")
+    assert embedding.model_name() == "BAAI/bge-m3"
+
+    # 显式模型优先于 preset
+    monkeypatch.setattr(settings, "embedding_model", "local-path/custom-model")
+    monkeypatch.setattr(settings, "embedding_preset", "bge-small-zh")
+    assert embedding.model_name() == "local-path/custom-model"
+    # 显式维度优先于 preset 维度
+    monkeypatch.setattr(settings, "embedding_dim", 640)
+    assert embedding.dimension() == 640
+
+    # 未知预设且无显式配置 → 未配置（容错）
+    monkeypatch.setattr(settings, "embedding_model", "")
+    monkeypatch.setattr(settings, "embedding_preset", "not-exist")
+    monkeypatch.setattr(settings, "embedding_dim", None)
+    assert embedding.is_configured() is False
+
+    # 预设清单完整（含本地小/中/大与远程项）
+    for key in ("bge-small-zh", "bge-base-zh", "bge-large-zh", "bge-m3",
+                "bge-small-en", "bge-base-en", "openai-3-small", "openai-3-large"):
+        p = embedding.preset_info(key)
+        assert p and p["model"] and p["dim"] > 0
+
+
 def test_embedding_provider_configured(monkeypatch):
     """远程 provider 需 base_url/api_key/model 齐备才视为已配置"""
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "embedding_model", "")
+    monkeypatch.setattr(settings, "embedding_preset", "")
+    monkeypatch.setattr(settings, "embedding_dim", None)
     assert embedding.is_configured() is False
 
     monkeypatch.setattr(settings, "embedding_model", "bge-m3")

@@ -143,6 +143,24 @@ EMBEDDING_DIM=1024                                      # 建议显式配置，�
 - LLM 覆盖配置：base_url / api_key / model / temperature / system prompt（存浏览器本地，随请求转发）；
 - DIY：悬浮球图案/尺寸/背景、面板背景、问候语，以及自定义 CSS/JS（作用于 `.taot-assistant-*` 类名，可做字体/动效等）。
 
+### Embedding 模型预设（小/中/大自行选择）
+
+.env 配置 `EMBEDDING_PRESET` 一键切换（未设置时用显式 `EMBEDDING_MODEL` + `EMBEDDING_DIM`）：
+
+| preset | 模型 | 维度 | 说明 |
+| --- | --- | --- | --- |
+| bge-small-zh | BAAI/bge-small-zh-v1.5 | 512 | 中文轻量（CPU 推荐、最快） |
+| bge-base-zh | BAAI/bge-base-zh-v1.5 | 768 | 中文中量（平衡） |
+| bge-large-zh | BAAI/bge-large-zh-v1.5 | 1024 | 中文重量（精度高） |
+| bge-m3 | BAAI/bge-m3 | 1024 | 多语言重量（需较高资源/30 系显卡更佳） |
+| bge-small-en | BAAI/bge-small-en-v1.5 | 384 | 英文轻量 |
+| bge-base-en | BAAI/bge-base-en-v1.5 | 768 | 英文中量 |
+| openai-3-small | text-embedding-3-small | 1536 | 远程 API（需 PROVIDER=api） |
+| openai-3-large | text-embedding-3-large | 3072 | 远程 API（需 PROVIDER=api） |
+
+> 更换模型导致维度变化后，Qdrant 会提示维度不一致。执行重建并重索引：
+> `docker compose exec backend python /app/scripts/rebuild_embeddings.py --reset --reindex`
+
 ## Docker：安装本地 Embedding（torch + BGE-M3）并防重复加载
 
 ```bash
