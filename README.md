@@ -11,17 +11,25 @@
 
 ## 快速开始（Docker 一键）
 
-```bash
-# 1. 启动基础设施：PostgreSQL / Qdrant / Redis
-docker compose up -d postgres qdrant redis
+基础服务（PostgreSQL/Redis/Qdrant/MySQL）为**独立容器**，应用用 Docker Compose 编排，`compose down` 不影响基础服务与数据卷。
 
-# 2. 启动后端 + Celery worker + beat（自动执行 alembic 迁移）
+```bash
+# 1. 确保独立基础服务（幂等；已存在则复用；端口被本机服务占用则跳过并提示）
+powershell -ExecutionPolicy Bypass -File deploy/infra.ps1
+
+# 2. 启动后端 + Celery worker + beat（自动等基础服务、执行 alembic 迁移）
 docker compose up -d --build backend worker beat
 
 # 3. 访问
 # 后端 API:      http://localhost:8000/api/v1 （交互文档 http://localhost:8000/docs 仅本机）
 # 前端 SPA:      http://localhost:8000
 ```
+
+> 补建 MySQL（需先以管理员释放 3306：`Stop-Service MySQL84; Set-Service MySQL84 -StartupType Disabled`）：
+> `powershell -ExecutionPolicy Bypass -File deploy/infra.ps1 -OnlyMysql`
+>
+> **环境感知**：若本机已有同端口服务，`deploy/infra.ps1` 会跳过该容器并提示；此时把连接地址改为本机服务即可（不重复创建）。
+> 独立容器位于外部网络 `taot-net`，应用内主机名：`taot-postgres` / `taot-redis` / `qdrant` / `taot-mysql`。
 
 启用本地 Embedding（镜像较大，需安装 torch）：
 
@@ -39,11 +47,9 @@ docker compose build --build-arg ENABLE_AI=1 backend worker
 一键部署（含环境、迁移与全部服务）：`start.bat` 或 `start.ps1`（两者同步更新）。
 
 ```bash
-# 1. 基础设施
-#    start.bat 会自动执行；或手动：
-docker compose up -d postgres qdrant redis
-
-# 2. 安装依赖（按 uv.lock 严格锁定；首次自动下载 Python 3.12）
+# 1. 独立基础服务（幂等，可重复执行）
+powershell -ExecutionPolicy Bypass -File deploy/infra.ps1
+# 2. 安装依赖（uv.lock 冻结；若容器运行应用则跳过，改为 docker compose up -d --build backend worker beat）
 uv sync --frozen
 # RAG/推荐需本地 Embedding（体积较大）：
 uv sync --extra ai
@@ -109,7 +115,9 @@ app/
 alembic/         数据库迁移（基线 + note_view_log）
 db/partition/    表分区启用指引（预留）
 frontend/        Vue3 + Pinia + Tailwind；组织/项目切换、移动端抽屉、AI 问答面板
-docker-compose.yml  postgres · qdrant · redis · backend · worker · beat
+docker-compose.yml  backend · worker · beat（基础服务由 deploy/infra.ps1 独立运行）
+deploy/infra.ps1    独立基础容器编排：postgres/redis/qdrant/mysql → 外部网络 taot-net
+wait_services.py    容器启动依赖等待（backend/worker/beat 入口）
 ```
 
 ## 测试

@@ -47,6 +47,7 @@ RUN if [ "$ENABLE_AI" = "1" ]; then \
 COPY app/ ./app/
 COPY alembic.ini ./
 COPY alembic/ ./alembic/
+COPY wait_services.py /app/wait_services.py
 COPY .env.example ./.env.example
 
 # 前端 SPA（由宿主构建的 frontend/dist 提供）
