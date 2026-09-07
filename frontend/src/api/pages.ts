@@ -1,64 +1,57 @@
 import api from './index'
-import type { Block, PageDetail, PageStats, PageTreeNode } from '@/types'
+import type { Block, PageDetail, PageRead, PageStats, PageTreeNode } from '@/types'
 
+/**
+ * 笔记 API（后端 Note 语义）。树/列表/创建/搜索均需项目上下文。
+ * 保留旧命名（pagesApi）以兼容现有编辑器组件。
+ */
 export const pagesApi = {
-  tree: () => api.get<PageTreeNode[]>('/pages/tree'),
+  // ---- 笔记 ----
+  tree: (projectId: string) => api.get<PageTreeNode[]>(`/projects/${projectId}/notes/`),
 
-  detail: (pageId: number) => api.get<PageDetail>(`/pages/${pageId}`),
+  graph: (projectId: string) => api.get<{ nodes: unknown[]; edges: unknown[] }>(`/projects/${projectId}/notes/graph`),
 
-  getBySlug: (slug: string) => api.get<PageDetail>(`/pages/by-slug/${slug}`),
+  detail: (noteId: string) => api.get<PageDetail>(`/notes/${noteId}`),
 
-  stats: (pageId: number) => api.get<PageStats>(`/pages/${pageId}/stats`),
+  getBySlug: (projectId: string, slug: string) =>
+    api.get<PageDetail>(`/projects/${projectId}/notes/by-slug/${slug}`),
 
-  create: (data: { title: string; icon?: string; category?: string; parent_id?: number }) =>
-    api.post('/pages/', data),
+  stats: (noteId: string) => api.get<PageStats>(`/notes/${noteId}/stats`),
 
-  update: (pageId: number, data: Record<string, unknown>) =>
-    api.patch(`/pages/${pageId}`, data),
+  create: (projectId: string, data: { title: string; icon?: string; parent_id?: string | null }) =>
+    api.post<PageRead>(`/projects/${projectId}/notes/`, data),
 
-  remove: (pageId: number) => api.delete(`/pages/${pageId}`),
+  update: (noteId: string, data: Record<string, unknown>) => api.patch<PageRead>(`/notes/${noteId}`, data),
 
-  duplicate: (pageId: number) => api.post(`/pages/${pageId}/duplicate`),
+  remove: (noteId: string) => api.delete(`/notes/${noteId}`),
 
-  syncLinkBlocks: (pageId: number) => api.post(`/pages/${pageId}/sync-link-blocks`),
+  duplicate: (noteId: string) => api.post<PageRead>(`/notes/${noteId}/duplicate`),
 
-  search: (q: string) => api.get('/pages/search', { params: { q } }),
+  syncLinkBlocks: (noteId: string) => api.post(`/notes/${noteId}/sync-link-blocks`),
 
-  // 检查重名页面
-  checkDuplicate: (parentId: number, title: string) =>
-    api.get<{ exists: boolean; page_id: number | null }>('/pages/check-duplicate', {
-      params: { parent_id: parentId, title },
-    }),
+  search: (projectId: string, q: string) =>
+    api.get<PageRead[]>(`/projects/${projectId}/notes/search`, { params: { q } }),
 
-  // file:// 路径上传
-  getFileUrl: (filePath: string) =>
-    api.post<{ url: string; filename: string }>('/pages/upload-local-file', { file_path: filePath }),
-
-  // 获取网页标题
-  getPageTitle: (url: string) =>
-    api.post<{ title: string }>('/pages/fetch-page-title', { url }),
+  // ---- ACL ----
+  grantAcl: (noteId: string, data: { username: string; permission: string }) =>
+    api.post(`/notes/${noteId}/acl`, data),
+  revokeAcl: (noteId: string, userId: number) => api.delete(`/notes/${noteId}/acl/${userId}`),
 }
 
 export const blocksApi = {
-  create: (pageId: number, data: { type: string; content?: Record<string, unknown>; sort_order?: number }) =>
-    api.post<Block>(`/blocks/${pageId}`, data),
+  create: (noteId: string, data: { type: string; content?: Record<string, unknown>; sort_order?: number }) =>
+    api.post<Block>(`/notes/${noteId}/blocks`, data),
 
-  update: (blockId: number, data: Record<string, unknown>) =>
+  update: (blockId: string, data: Record<string, unknown>) =>
     api.patch<Block>(`/blocks/${blockId}`, data),
 
-  remove: (blockId: number) => api.delete(`/blocks/${blockId}`),
+  remove: (blockId: string) => api.delete(`/blocks/${blockId}`),
 
-  reorder: (pageId: number, blockIds: number[]) =>
-    api.put<Block[]>(`/blocks/${pageId}/reorder`, blockIds),
+  reorder: (noteId: string, blockIds: string[]) =>
+    api.put<Block[]>(`/notes/${noteId}/blocks/reorder`, blockIds),
 
-  duplicate: (blockId: number) => api.post<Block>(`/blocks/${blockId}/duplicate`),
+  duplicate: (blockId: string) => api.post<Block>(`/blocks/${blockId}/duplicate`),
 
-  importToPage: (pageId: number, content: string, format: 'html' | 'md') =>
-    api.post<Block[]>(`/blocks/${pageId}/import`, { content, format }),
-
-  // 新：导入目录/文件到页面树
-  importPages: (formData: FormData) =>
-    api.post('/pages/import', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    }),
+  importToNote: (noteId: string, content: string, format: 'html' | 'md') =>
+    api.post<Block[]>(`/notes/${noteId}/blocks/import`, { content, format }),
 }

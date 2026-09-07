@@ -1,8 +1,8 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: '/Taot',
-  timeout: 15000,
+  baseURL: '/api/v1',
+  timeout: 60000,
 })
 
 api.interceptors.request.use((config) => {
