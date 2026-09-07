@@ -33,6 +33,12 @@ async def _index_note(note_id: str, session) -> None:
     if not embedding.is_configured():
         logger.warning("Embedding 未配置，跳过向量索引 note=%s", note_id)
         return
+    try:
+        embed_dim = embedding.dimension()
+    except RuntimeError as exc:
+        # 未安装 AI 依赖（torch/模型）时静默跳过，避免任务反复失败
+        logger.warning("Embedding 不可用，跳过向量索引 note=%s: %s", note_id, exc)
+        return
 
     result = await session.execute(
         select(NoteBlock).where(NoteBlock.note_id == note_id).order_by(NoteBlock.sort_order)
@@ -47,7 +53,7 @@ async def _index_note(note_id: str, session) -> None:
         logger.info("笔记无可索引内容 note=%s", note_id)
         return
 
-    qdrant_service.ensure_collections(vector_size=embedding.dimension())
+    qdrant_service.ensure_collections(vector_size=embed_dim)
     vectors = embedding.embed_texts([c["text"] for c in chunks])
     payload_note = {
         "id": note.id,

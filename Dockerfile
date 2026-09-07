@@ -5,13 +5,14 @@
 
 FROM ghcr.io/astral-sh/uv:0.12.6 AS uv
 
-# 前端构建（产物供 SPA 托管）
-FROM node:20-alpine AS frontend-builder
-WORKDIR /app/frontend
-COPY frontend/package*.json ./
-RUN npm ci
-COPY frontend/ .
-RUN npm run build
+# 说明：前端 SPA 由宿主先构建（frontend/dist），直接 COPY 进镜像，避免构建期拉取 node 镜像。
+# 如需镜像内自构建前端，恢复以下 stage 并把下方 COPY 改回 COPY --from=frontend-builder ... ：
+# FROM node:20-alpine AS frontend-builder
+# WORKDIR /app/frontend
+# COPY frontend/package*.json ./
+# RUN npm ci
+# COPY frontend/ .
+# RUN npm run build
 
 FROM python:3.12-slim
 WORKDIR /app
@@ -48,8 +49,8 @@ COPY alembic.ini ./
 COPY alembic/ ./alembic/
 COPY .env.example ./.env.example
 
-# 前端 SPA（由 frontend 构建产物提供）
-COPY --from=frontend-builder /app/frontend/dist ./frontend/dist/
+# 前端 SPA（由宿主构建的 frontend/dist 提供）
+COPY frontend/dist/ ./frontend/dist/
 
 RUN mkdir -p storage static uploads
 

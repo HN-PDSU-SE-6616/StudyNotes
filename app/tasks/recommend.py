@@ -61,7 +61,11 @@ def refresh_recommendations() -> None:
 async def _refresh_all(session) -> None:
     from datetime import datetime, timedelta
 
-    qdrant_service.ensure_collections(vector_size=embedding.dimension())
+    try:
+        qdrant_service.ensure_collections(vector_size=embedding.dimension())
+    except RuntimeError as exc:
+        logger.warning("Embedding 不可用，跳过推荐刷新: %s", exc)
+        return
     cutoff = datetime.utcnow() - timedelta(days=RECENT_DAYS)
 
     # 活跃用户

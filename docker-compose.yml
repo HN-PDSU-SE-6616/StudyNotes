@@ -20,15 +20,17 @@ services:
       retries: 10
     restart: unless-stopped
 
-  qdrant:
-    image: qdrant/qdrant:v1.13.0
-    container_name: taot-qdrant
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    restart: unless-stopped
+  # qdrant 由独立容器提供（docker run：容器名 qdrant，数据卷 qdrant_storage），
+  # 已接入本 compose 网络，服务内可用主机名 http://qdrant:6333 访问，无需在此重复编排：
+  # qdrant:
+  #   image: qdrant/qdrant:v1.13.0
+  #   container_name: taot-qdrant
+  #   ports:
+  #     - "6333:6333"
+  #     - "6334:6334"
+  #   volumes:
+  #     - qdrant_data:/qdrant/storage
+  #   restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -76,8 +78,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      qdrant:
-        condition: service_started
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -89,6 +89,12 @@ services:
       dockerfile: Dockerfile
     container_name: taot-worker
     command: celery -A app.worker.celery_app worker -Q parse,index -l info
+    # 镜像级 HEALTHCHECK 面向 uvicorn /docs，此处覆盖为存活探针
+    healthcheck:
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     environment:
       - DATABASE_URL=postgresql+asyncpg://taot:taot@postgres:5432/taot
       - QDRANT_URL=http://qdrant:6333
@@ -105,8 +111,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      qdrant:
-        condition: service_started
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -118,6 +122,12 @@ services:
       dockerfile: Dockerfile
     container_name: taot-beat
     command: celery -A app.worker.celery_app beat -l info
+    # 镜像级 HEALTHCHECK 面向 uvicorn /docs，此处覆盖为存活探针
+    healthcheck:
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     environment:
       - DATABASE_URL=postgresql+asyncpg://taot:taot@postgres:5432/taot
       - QDRANT_URL=http://qdrant:6333
@@ -134,5 +144,4 @@ services:
 
 volumes:
   pg_data:
-  qdrant_data:
   redis_data:
