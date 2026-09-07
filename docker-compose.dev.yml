@@ -1,0 +1,30 @@
+# ============================================================
+#   开发/快速迭代模式（可选覆盖层）
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+#   把宿主源码/前端产物以只读绑定卷覆盖进容器：
+#   - 修改任意 app/**/*.py / scripts 后 → 只需
+#       docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+#         restart backend worker
+#     （秒级生效，无需 docker compose build）
+#   - 修改前端源码后 → 先 npm run build，再 restart backend
+#   - 仅当 新增 Python 依赖（pyproject.toml / uv.lock）时才需要重新 build
+# ============================================================
+name: taot-kb-dev
+
+services:
+  backend:
+    volumes:
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+      - ./frontend/dist:/app/frontend/dist:ro
+
+  worker:
+    volumes:
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+
+  beat:
+    volumes:
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro

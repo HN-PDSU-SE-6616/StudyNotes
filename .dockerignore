@@ -18,6 +18,15 @@ node_modules/
 .env
 .env.local
 
+# VCS & local（.git 高达百 MB，排除后每次 build 上下文上传秒级）
+.git/
+.gitignore
+*.md~
+*_me*.txt
+_smoke_*.py
+_dbg*.py
+_patch_*.py
+
 # IDE
 .idea/
 .vscode/

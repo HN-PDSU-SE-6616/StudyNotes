@@ -38,7 +38,9 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 # 按 uv.lock 冻结安装（ENABLE_AI=1 时附带可选 AI 依赖）
 COPY pyproject.toml uv.lock .python-version ./
-RUN if [ "$ENABLE_AI" = "1" ]; then \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=cache,target=/root/.cache/pip \
+    if [ "$ENABLE_AI" = "1" ]; then \
         uv sync --frozen --no-dev --extra ai; \
     else \
         uv sync --frozen --no-dev; \

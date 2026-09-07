@@ -153,8 +153,9 @@ EMBEDDING_DIM=1024                                      # 建议显式配置，�
 - **会话上下文**：`session_id` 记忆最近对话（Redis，每用户隔离），`POST /assistant/context/clear` 清空；
 - **相似问题热缓存**：同一用户重复/近似问题（归一化 + 字符 bigram/LCS 相似 ≥ 阈值）
   直接复用回答，减少重复调用模型（流式同样命中并回放）；
-- **外观配置**：浅色/深色（黑白）主题、面板实体不透明背景、悬浮球尺寸/色板/图标
-  （预设 emoji 或本地上传图片）、创造性温度、问候语与角色 Prompt 预设；
+- **外观配置**：浅色/深色（黑白）主题、面板实体不透明背景、悬浮球尺寸/色板/整体透明度、
+  面板背景（色板/渐变或上传图片背景）、图标（预设 emoji 或本地上传图片）、创造性温度、
+  问候语与角色 Prompt 预设；
 - **Markdown 渲染**：助手回复以 HTML 渲染（粗体/列表/引用/代码块/表格，流式中未闭合
   代码围栏以纯文本保护），经 DOMPurify 消毒；
 - DIY：自定义 CSS/JS（作用于 `.taot-assistant-*` 类名；默认特效 CSS 示例在输入框中可见可改写）。
@@ -176,6 +177,30 @@ EMBEDDING_DIM=1024                                      # 建议显式配置，�
 
 > 更换模型导致维度变化后，Qdrant 会提示维度不一致。执行重建并重索引：
 > `docker compose exec backend python /app/scripts/rebuild_embeddings.py --reset --reindex`
+
+## 本地快速迭代（改代码秒级生效，避免重复 build）
+
+每次只改 `app/**/*.py` / `scripts` / 前端源码时，**不必重新 `docker compose build`**（镜像内 AI 依赖重装很慢）：
+
+```bash
+# 1) 一次性构建（依赖变更时才需要，如新增 Python 包）
+docker compose build --build-arg ENABLE_AI=1 backend worker beat
+
+# 2) 日常开发：叠加 dev 覆盖层（把宿主源码只读挂进容器）
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d backend worker
+
+# 3) 改了 Python 代码 → 秒级重启即可生效
+#    docker compose -f docker-compose.yml -f docker-compose.dev.yml restart backend worker
+
+# 4) 改了前端源码 → 先构建产物再重启
+#    cd frontend && npm run build
+#    docker compose -f docker-compose.yml -f docker-compose.dev.yml restart backend
+```
+
+提速要点：
+- `.dockerignore` 已排除 `.git/`（约 100MB+ 构建上下文）；
+- Dockerfile 的 `uv sync` 使用 BuildKit cache mount（`/root/.cache/uv`），即便该层被重跑，
+  torch/AI 依赖也只下载一次，之后从缓存秒装。
 
 ## Docker：安装本地 Embedding（torch + BGE-M3）并防重复加载
 
