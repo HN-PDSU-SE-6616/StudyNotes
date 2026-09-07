@@ -142,8 +142,150 @@ def test_import_into_target_note(client, register):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["root_note_id"] == note["id"]
-    # 子目录笔记挂在目标笔记下
+    # 目录名 != 选中页名：选中页下建“与目录同名”的目录容器页
+    assert body["container_note_id"]
     tree = client.get(f"/api/v1/projects/{pid}/notes/", headers=headers).json()
     flat = _tree_map(tree)
-    child = next(n for n in flat.values() if n["title"] == "子")
-    assert child["parent_id"] == note["id"]
+    container = flat[body["container_note_id"]]
+    assert container["title"] == "子"
+    assert container["parent_id"] == note["id"]
+
+
+def test_import_folder_host_same_name_append_and_dedupe(client, register):
+    """选中页标题 == 目录名：同名根层文档追加到选中页；重复导入不再追加"""
+    headers, _user = register("imp_host")
+    pid = _first_org_project(client, headers)
+    page = client.post(
+        f"/api/v1/projects/{pid}/notes/", json={"title": "Python 环境"}, headers=headers,
+    ).json()
+
+    files = [
+        ("files", ("Python 环境/Python 环境.md",
+                   "# Python 环境\n\n1. 安装\n2. 配置\n".encode("utf-8"), "text/markdown")),
+        ("files", ("Python 环境/进阶/进阶.md",
+                   "# 进阶\n".encode("utf-8"), "text/markdown")),
+    ]
+    r = client.post(
+        f"/api/v1/projects/{pid}/import", files=files,
+        data={"target_note_id": page["id"]}, headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["matched_target"] is True
+    assert body["container_note_id"] is None  # 宿主场景不套壳
+    assert any(n["title"] == "进阶" for n in body["notes"])  # 子树已建成
+
+    detail = client.get(f"/api/v1/notes/{page['id']}", headers=headers).json()
+    texts = "".join(
+        (b.get("content") or {}).get("text", "")
+        for b in detail["blocks"] if b["type"] != "list"
+    )
+    lists = [b for b in detail["blocks"] if b["type"] == "list"]
+    assert lists and lists[0]["content"]["items"][0]["text"] == "安装"
+    assert "进阶" not in texts  # 非同名文档没有污染宿主页
+
+    # 子树：进阶 目录成为宿主页的子页
+    tree = client.get(f"/api/v1/projects/{pid}/notes/", headers=headers).json()
+    flat = _tree_map(tree)
+    page_node = flat[page["id"]]
+    child_titles = [c["title"] for c in page_node.get("children") or []]
+    assert "进阶" in child_titles
+
+    # 重复导入（overwrite=false）：同名文档因摘要命中而跳过，不重复追加
+    r2 = client.post(
+        f"/api/v1/projects/{pid}/import", files=files,
+        data={"target_note_id": page["id"]}, headers=headers,
+    )
+    assert r2.status_code == 200
+    body2 = r2.json()
+    assert any("Python 环境.md" in s for s in body2["skipped"])
+    detail2 = client.get(f"/api/v1/notes/{page['id']}", headers=headers).json()
+    lists2 = [b for b in detail2["blocks"] if b["type"] == "list"]
+    assert len(lists2) == 1  # 未翻倍
+
+
+def test_import_folder_no_same_name_keeps_target_empty(client, register):
+    """目录内无同名文档：选中页不写入任何内容，内容进入目录容器页"""
+    headers, _user = register("imp_nomatch")
+    pid = _first_org_project(client, headers)
+    page = client.post(
+        f"/api/v1/projects/{pid}/notes/", json={"title": "知识库"}, headers=headers,
+    ).json()
+
+    files = [
+        ("files", ("others/index.md", "# Others\n\nindex 内容\n".encode("utf-8"), "text/markdown")),
+    ]
+    r = client.post(
+        f"/api/v1/projects/{pid}/import", files=files,
+        data={"target_note_id": page["id"]}, headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["matched_target"] is False
+    assert body["container_note_id"]
+
+    detail = client.get(f"/api/v1/notes/{page['id']}", headers=headers).json()
+    body_text = "".join((b.get("content") or {}).get("text", "") for b in detail["blocks"])
+    assert "index 内容" not in body_text  # 页面保持为空
+
+    tree = client.get(f"/api/v1/projects/{pid}/notes/", headers=headers).json()
+    flat = _tree_map(tree)
+    container = flat[body["container_note_id"]]
+    assert container["title"] == "others"
+    cont_detail = client.get(f"/api/v1/notes/{container['id']}", headers=headers).json()
+    assert "index 内容" in "".join(
+        (b.get("content") or {}).get("text", "") for b in cont_detail["blocks"]
+    )
+
+
+def test_import_relative_links_resolved_after_tree_built(client, register):
+    """阶段化导入：文档间相对链接按源文档目录解析并改为 /notes/{slug}"""
+    headers, _user = register("imp_link")
+    pid = _first_org_project(client, headers)
+    page = client.post(
+        f"/api/v1/projects/{pid}/notes/", json={"title": "项目"}, headers=headers,
+    ).json()
+
+    files = [
+        ("files", ("项目/a.md", "# A\n\n[去看B](../项目/b.md)\n".encode("utf-8"), "text/markdown")),
+        ("files", ("项目/b.md", "# B\n\nB 内容\n".encode("utf-8"), "text/markdown")),
+    ]
+    r = client.post(
+        f"/api/v1/projects/{pid}/import", files=files,
+        data={"target_note_id": page["id"]}, headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    tree = client.get(f"/api/v1/projects/{pid}/notes/", headers=headers).json()
+    flat = _tree_map(tree)
+    b_node = next(n for n in flat.values() if n["title"] == "b")
+    a_node = next(n for n in flat.values() if n["title"] == "a")
+    a_detail = client.get(f"/api/v1/notes/{a_node['id']}", headers=headers).json()
+    paras = " ".join((b.get("content") or {}).get("text", "") for b in a_detail["blocks"])
+    assert f"/notes/{b_node['slug']}" in paras
+    assert "../项目/b.md" not in paras
+
+
+def test_delete_note_with_children_cascades(client, register):
+    """删除含子页面的笔记：级联删除整棵子树，不再 FK 报错"""
+    headers, _user = register("imp_del")
+    pid = _first_org_project(client, headers)
+    page = client.post(
+        f"/api/v1/projects/{pid}/notes/", json={"title": "根页"}, headers=headers,
+    ).json()
+    files = [
+        ("files", ("根页/子1/x.md", "# x\n".encode("utf-8"), "text/markdown")),
+        ("files", ("根页/子2/y.md", "# y\n".encode("utf-8"), "text/markdown")),
+    ]
+    r = client.post(
+        f"/api/v1/projects/{pid}/import", files=files,
+        data={"target_note_id": page["id"]}, headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    before = len(_tree_map(client.get(f"/api/v1/projects/{pid}/notes/", headers=headers).json()))
+    dr = client.delete(f"/api/v1/notes/{page['id']}", headers=headers)
+    assert dr.status_code == 200, dr.text
+    after = len(_tree_map(client.get(f"/api/v1/projects/{pid}/notes/", headers=headers).json()))
+    assert after == before - 3  # 根页 + 子1/子2 子树级联清空

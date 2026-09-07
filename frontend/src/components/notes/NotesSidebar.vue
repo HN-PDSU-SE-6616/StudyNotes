@@ -128,6 +128,10 @@
         <div class="bg-white rounded-2xl p-6 w-96 shadow-xl">
           <h3 class="text-lg font-semibold text-slate-800 mb-2">导入目录/文件</h3>
           <p class="text-sm text-slate-500 mb-5">选择导入方式。目录导入会递归处理子目录结构。</p>
+          <div v-if="importTargetId" class="mb-4 px-3 py-2 rounded-lg bg-brand-50 text-xs text-brand-700 leading-relaxed">
+            导入目标：当前页面。目录内若存在<b>与当前页面同名</b>的文件，内容将<b>追加</b>到该页面（重复导入会自动跳过）；
+            未找到同名文件时当前页面保持不变，其余内容按目录结构建为子页面。
+          </div>
           <div class="space-y-3">
             <button
               class="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-brand-50 hover:border-brand-300 transition-colors text-left"
@@ -270,7 +274,22 @@ async function uploadImportFiles(fileList: FileList) {
     }
     const targetId = importTargetId.value
     if (targetId) {
-      // 导入到已有笔记：刷新该笔记（顶层内容已合并）
+      const msgs: string[] = []
+      if (data.matched_target) {
+        msgs.push(`✔ 已把同名文档「${data.matched_doc || ''}」的内容追加到当前页面`)
+      } else if (data.created.length || data.skipped.length) {
+        msgs.push('当前目录中未找到与当前页面同名的文档，当前页面保持为空')
+      }
+      if (data.container_note_id) {
+        msgs.push('目录中其余内容已导入到“与目录同名”的子页面下')
+      } else if (data.created.length && !data.matched_target) {
+        msgs.push('目录内容已按结构建为当前页面的子页面')
+      }
+      if (data.skipped.length && data.skipped.length >= data.created.length) {
+        msgs.push(`已有 ${data.skipped.length} 个文件被跳过（内容已存在）`)
+      }
+      if (msgs.length) alert(msgs.join('\n'))
+      // 导入到已有笔记：刷新该笔记（顶层内容可能已追加）
       emit('select', targetId)
     } else if (data.root_note_id) {
       emit('select', data.root_note_id)

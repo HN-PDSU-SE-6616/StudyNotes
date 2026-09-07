@@ -94,5 +94,8 @@ async def import_into_project(
         "reused": result.reused,
         "skipped": result.skipped,
         "assets": result.assets,
+        "matched_target": result.matched_target,
+        "matched_doc": result.matched_doc,
+        "container_note_id": result.container_note_id,
         "notes": created_notes,
     }

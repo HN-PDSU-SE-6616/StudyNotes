@@ -14,6 +14,9 @@ export interface ImportResponse {
   reused: string[]
   skipped: string[]
   assets: number
+  matched_target: boolean
+  matched_doc?: string | null
+  container_note_id?: string | null
   notes: ImportedNoteBrief[]
 }
 
