@@ -25,6 +25,16 @@ export const pagesApi = {
 
   remove: (noteId: string) => api.delete(`/notes/${noteId}`),
 
+  batchDelete: (noteIds: string[]) =>
+    api.post<{ deleted: string[]; failed: string[]; deleted_count: number }>(
+      '/notes/batch-delete',
+      { note_ids: noteIds },
+    ),
+
+  clearProject: (projectId: string) =>
+    api.delete<{ deleted_roots: number; notes_removed: number }>(`/projects/${projectId}/notes/`),
+
+
   duplicate: (noteId: string) => api.post<PageRead>(`/notes/${noteId}/duplicate`),
 
   syncLinkBlocks: (noteId: string) => api.post(`/notes/${noteId}/sync-link-blocks`),

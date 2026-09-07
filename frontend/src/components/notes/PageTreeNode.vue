@@ -12,6 +12,14 @@
       @dragleave="onDragLeave"
       @drop.prevent="onDrop"
     >
+      <!-- 批量模式勾选框 -->
+      <span
+        v-if="batchOpen"
+        class="w-4 h-4 shrink-0 rounded border-2 flex items-center justify-center transition-colors"
+        :class="isChecked ? 'bg-brand-500 border-brand-500 text-white' : 'border-slate-300 bg-white'"
+      >
+        <svg v-if="isChecked" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3.5" d="M5 13l4 4L19 7" /></svg>
+      </span>
       <button
         v-if="hasChildren"
         class="w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-600 shrink-0"
@@ -202,6 +210,8 @@
         :active-id="activeId"
         :all-pages="allPages"
         :depth="depth + 1"
+        :batch-open="batchOpen"
+        :checked-ids="checkedIds"
         @select="$emit('select', $event)"
         @action="(type, payload) => $emit('action', type, payload)"
       />
@@ -213,6 +223,8 @@
         :all-pages="allPages"
         :depth="depth + 1"
         :is-linked="true"
+        :batch-open="batchOpen"
+        :checked-ids="checkedIds"
         @select="$emit('select', $event)"
         @action="(type, payload) => $emit('action', type, payload)"
       />
@@ -255,6 +267,8 @@ const props = defineProps<{
   depth?: number
   isLinked?: boolean
   allPages?: TreeNode[]
+  batchOpen?: boolean
+  checkedIds?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -288,6 +302,7 @@ watch(() => props.activeId, () => {
 }, { immediate: true })
 const depth = computed(() => props.depth ?? 0)
 const isActive = computed(() => props.activeId === props.node.id)
+const isChecked = computed(() => (props.checkedIds || []).includes(String(props.node.id)))
 const hasChildren = computed(
   () => (props.node.children?.length ?? 0) + (props.node.linked_children?.length ?? 0) > 0,
 )

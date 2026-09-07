@@ -54,12 +54,43 @@
     <div class="flex-1 overflow-y-auto p-3">
       <div class="flex items-center justify-between mb-2 px-2">
         <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">我的页面</span>
+        <div class="flex items-center gap-1">
+          <button
+            class="px-2 py-1 text-[11px] rounded-lg hover:bg-red-50 text-red-500 transition-colors"
+            title="清理误导入：批量/全部删除"
+            @click="openBatchPanel"
+          >
+            批量删除
+          </button>
+          <button
+            class="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-brand-50 text-brand-600 transition-colors"
+            title="新增页面"
+            @click="$emit('create')"
+          >
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 批量管理模式工具条 -->
+      <div v-if="batchOpen" class="mb-2 px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 flex items-center gap-2 text-xs">
+        <span class="font-semibold text-slate-600">已选 {{ checkedIds.length }}</span>
+        <button class="text-brand-600 hover:underline" @click="selectAllInTree">全选</button>
+        <button class="text-slate-500 hover:underline" @click="checkedIds = []">清空</button>
+        <span class="flex-1" />
         <button
-          class="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-brand-50 text-brand-600 transition-colors"
-          title="新增页面"
-          @click="$emit('create')"
+          class="px-2 py-1 rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-40"
+          :disabled="!checkedIds.length"
+          @click="confirmBatchDelete"
         >
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+          删除所选
+        </button>
+      </div>
+
+      <!-- 危险操作：清空整个项目 -->
+      <div v-if="!batchOpen && pageStore.tree.length" class="mb-2 px-2">
+        <button class="text-[11px] text-red-400 hover:text-red-600 hover:underline" @click="confirmClearProject">
+          ⚠ 清空此项目的全部页面（导入失误后整体清理）
         </button>
       </div>
 
@@ -72,9 +103,11 @@
         v-for="node in pageStore.tree"
         :key="node.id"
         :node="node"
-        :active-id="activeId"
+        :active-id="batchOpen ? '' : activeId"
         :all-pages="flatPages"
-        @select="$emit('select', $event)"
+        :batch-open="batchOpen"
+        :checked-ids="checkedIds"
+        @select="onTreeNodeClick"
         @action="handleAction"
       />
     </div>
@@ -175,6 +208,7 @@ import { ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { usePageStore } from '@/stores/page'
+import { pagesApi } from '@/api/pages'
 import type { ImportResponse } from '@/api/imports'
 import type { PageTreeNode as PageTreeNodeType } from '@/types'
 import UserAvatar from '@/components/common/UserAvatar.vue'
@@ -211,6 +245,52 @@ const auth = useAuthStore()
 const pageStore = usePageStore()
 const router = useRouter()
 const searchInput = ref('')
+
+// ---------- 批量删除 / 清空项目 ----------
+const batchOpen = ref(false)
+const checkedIds = ref<string[]>([])
+
+function openBatchPanel() {
+  batchOpen.value = !batchOpen.value
+  checkedIds.value = []
+}
+
+function toggleNode(id: string) {
+  const i = checkedIds.value.indexOf(id)
+  if (i >= 0) checkedIds.value.splice(i, 1)
+  else checkedIds.value.push(id)
+}
+
+function onTreeNodeClick(id: string) {
+  if (batchOpen.value) toggleNode(id)
+  else emit('select', id)
+}
+
+function selectAllInTree() {
+  checkedIds.value = flatPages.value.map((n) => n.id)
+}
+
+async function confirmBatchDelete() {
+  if (!checkedIds.value.length) return
+  const ok = window.confirm(`确定删除选中的 ${checkedIds.value.length} 个页面吗？\n每个页面会连同其子页面一起删除，不可恢复。`)
+  if (!ok) return
+  const { data } = await pagesApi.batchDelete(checkedIds.value)
+  await pageStore.fetchTree()
+  checkedIds.value = []
+  batchOpen.value = false
+  const msg = `已删除 ${data.deleted_count} 个页面` + (data.failed.length ? `，${data.failed.length} 个无权限或不存在` : '')
+  alert(msg)
+}
+
+async function confirmClearProject() {
+  const ok = window.confirm('确定清空此项目的全部页面吗？\n所有页面及其子页面将被永久删除，不可恢复。')
+  if (!ok) return
+  const { data } = await pagesApi.clearProject(pageStore.projectId())
+  await pageStore.fetchTree()
+  pageStore.currentPage = null
+  alert(`已清空：删除 ${data.deleted_roots} 棵根页面树，共 ${data.notes_removed} 个页面`)
+}
+
 
 // 文件导入
 const dirInput = ref<HTMLInputElement>()
