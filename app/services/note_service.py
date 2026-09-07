@@ -7,10 +7,12 @@ from sqlmodel import select
 
 from app.models.note import (
     Note,
+    NoteAcl,
     NoteBlock,
     NoteLink,
     NoteStats,
     NoteTreeNode,
+    NoteViewLog,
 )
 from app.models.user import User
 
@@ -149,6 +151,44 @@ async def build_note_graph(session: AsyncSession, project_id: str) -> dict:
                 edges.append(edge)
 
     return {"nodes": nodes, "edges": edges}
+
+
+async def purge_note_tree(session: AsyncSession, note_id: str) -> None:
+    """递归删除笔记及其整棵子树（块/链接/ACL/浏览日志同步清理）。
+
+    叶子优先逐层 flush，规避 note 自引用外键在批量 flush 时的删除顺序问题。
+    """
+    to_delete: list[str] = []
+    stack = [note_id]
+    while stack:
+        nid = stack.pop()
+        to_delete.append(nid)
+        rows = await session.execute(select(Note).where(Note.parent_id == nid))
+        for child in rows.scalars().all():
+            stack.append(child.id)
+
+    if to_delete:
+        rows = await session.execute(select(NoteBlock).where(NoteBlock.note_id.in_(to_delete)))
+        for b in rows.scalars().all():
+            await session.delete(b)
+        for model, col in ((NoteAcl, "note_id"), (NoteViewLog, "note_id")):
+            rows = await session.execute(select(model).where(getattr(model, col).in_(to_delete)))
+            for r in rows.scalars().all():
+                await session.delete(r)
+        rows = await session.execute(
+            select(NoteLink).where(
+                (NoteLink.source_note_id.in_(to_delete)) | (NoteLink.target_note_id.in_(to_delete))
+            )
+        )
+        for r in rows.scalars().all():
+            await session.delete(r)
+        await session.flush()
+    for nid in reversed(to_delete):
+        note = await session.get(Note, nid)
+        if note:
+            await session.delete(note)
+            await session.flush()
+    await session.commit()
 
 
 async def compute_note_stats(

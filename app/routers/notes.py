@@ -37,6 +37,7 @@ from app.services.note_service import (
     get_project_notes,
     sync_note_link_blocks_order,
 )
+from app.services.note_service import purge_note_tree
 from app.tasks.index import queue_delete_note_index, queue_index_note
 
 collection = APIRouter(prefix="/projects/{project_id}/notes", tags=["笔记"])
@@ -179,37 +180,13 @@ async def update_note(
     return _gen_note_dict(note)
 
 
-@items.delete("/{note_id}", summary="删除笔记")
+@items.delete("/{note_id}", summary="删除笔记（含子页面子树）")
 async def delete_note(
     note_id: str,
     perm: PermissionChecker = Depends(get_permission_checker),
 ):
     note, _ = await perm.require_note(note_id, "delete")
-    blocks = await get_note_blocks(perm.session, note.id)
-    for b in blocks:
-        await perm.session.delete(b)
-
-    links = (await perm.session.execute(
-        select(NoteLink).where(
-            (NoteLink.source_note_id == note_id) | (NoteLink.target_note_id == note_id)
-        )
-    )).scalars().all()
-    for link in links:
-        await perm.session.delete(link)
-
-    acls = (await perm.session.execute(
-        select(NoteAcl).where(NoteAcl.note_id == note_id)
-    )).scalars().all()
-    for a in acls:
-        await perm.session.delete(a)
-    view_logs = (await perm.session.execute(
-        select(NoteViewLog).where(NoteViewLog.note_id == note_id)
-    )).scalars().all()
-    for v in view_logs:
-        await perm.session.delete(v)
-
-    await perm.session.delete(note)
-    await perm.session.commit()
+    await purge_note_tree(perm.session, note.id)
     queue_delete_note_index(note_id)
     # 同步引用该笔记的 note_link 块
     await sync_note_link_blocks_order(perm.session, note_id)
