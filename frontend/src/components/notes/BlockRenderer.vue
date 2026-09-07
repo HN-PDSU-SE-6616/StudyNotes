@@ -332,31 +332,36 @@
         />
       </blockquote>
 
-      <!-- 列表 / 任务列表 -->
+      <!-- 列表 / 任务列表（一个块可含多行 items，有序连号渲染） -->
       <div v-else-if="block.type === 'list'" class="py-1">
-        <!-- 任务列表 -->
-        <div v-if="isTask && !editing" class="space-y-0.5">
+        <!-- 查看模式 -->
+        <div v-if="!editing" class="cursor-text" @click="startEdit">
+          <div v-if="!listRows.length" class="text-slate-400">
+            {{ isTask ? '☐ 任务项...' : isOrdered ? '1. 列表项...' : '• 列表项...' }}
+          </div>
           <div
-            v-for="(item, i) in listItems"
+            v-for="(item, i) in listRows"
             :key="i"
-            class="flex items-start gap-2 py-0.5 group cursor-pointer"
-            @click="toggleTaskItem(i)"
+            class="flex items-start gap-1.5 py-0.5 group"
+            :class="{ 'cursor-pointer': isTask }"
+            :style="{ paddingLeft: (item.indent || 0) * 20 + 'px' }"
+            @click="isTask ? toggleTaskItem(i) : undefined"
           >
-            <span class="w-4 h-4 mt-0.5 rounded border-2 shrink-0 flex items-center justify-center transition-colors"
-              :class="item.checked ? 'bg-brand-500 border-brand-500 text-white' : 'border-slate-300 hover:border-brand-400'"
+            <!-- 任务复选框 -->
+            <span
+              v-if="isTask"
+              class="w-4 h-4 mt-0.5 rounded border-2 shrink-0 flex items-center justify-center transition-colors"
+              :class="item.checked ? 'bg-brand-500 border-brand-500 text-white' : 'border-slate-300 group-hover:border-brand-400'"
             >
               <svg v-if="item.checked" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" /></svg>
             </span>
-            <span class="text-slate-700 leading-relaxed" :class="{ 'line-through text-slate-400': item.checked }" v-html="renderInlineMarkdown(item.text) || '任务项'" />
+            <span v-else class="text-slate-400 w-6 shrink-0 text-right select-none">{{ item.label }}</span>
+            <span
+              class="text-slate-700 leading-relaxed"
+              :class="{ 'line-through text-slate-400': item.checked }"
+              v-html="renderInlineMarkdown(item.text) || (isTask ? '任务项' : '')"
+            />
           </div>
-        </div>
-        <!-- 普通列表显示 -->
-        <div v-else-if="!editing" class="cursor-text" @click="startEdit">
-          <p v-if="!listText" class="text-slate-400">{{ isOrdered ? '1. 列表项...' : '• 列表项...' }}</p>
-          <p v-else class="text-slate-700 leading-relaxed">
-            <span v-if="!isTask" class="text-slate-400 mr-1">{{ isOrdered ? '1. ' : '• ' }}</span>
-            <span v-html="formattedListText" />
-          </p>
         </div>
         <!-- 编辑模式 -->
         <div v-else class="flex items-start gap-1">
@@ -366,6 +371,7 @@
             ref="inputRef"
             v-model="editText"
             class="flex-1 resize-none bg-transparent border-none outline-none text-slate-700 leading-relaxed"
+            :rows="Math.max(listRows.length, 1)"
             @blur="saveListEdit"
             @keydown.enter.exact.prevent="onEnterInEditList"
             @keydown.escape="cancelEdit"
@@ -508,6 +514,7 @@
 import { ref, computed, nextTick, onMounted, watch, type Ref } from 'vue'
 import type { Block, PageTreeNode, TableBlockContent } from '@/types'
 import { filesApi } from '@/api/files'
+import { useOrgStore } from '@/stores/org'
 import hljs from 'highlight.js'
 import python from 'highlight.js/lib/languages/python'
 import bash from 'highlight.js/lib/languages/bash'
@@ -729,7 +736,8 @@ watch(showLangDropdown, (v) => {
 // 新创建的空 block 自动进入编辑模式（有 contentPlaceholder 时跳过，以便显示占位提示）
 onMounted(() => {
   if (props.contentPlaceholder) return
-  const contentText = String(props.block.content.text || props.block.content.code || props.block.content.url || '')
+  const listOnlyText = listItems.value.map((i) => i.text).join('')
+  const contentText = String(props.block.content.text || props.block.content.code || props.block.content.url || '') || listOnlyText
   const hasTableHeaders = Array.isArray(props.block.content.headers) && (props.block.content.headers as unknown[]).length > 0
   if (!contentText && !hasTableHeaders && ['paragraph', 'heading', 'quote', 'callout', 'list', 'code', 'image', 'table'].includes(props.block.type)) {
     startEdit()
@@ -741,9 +749,49 @@ const code = computed(() => String(props.block.content.code || ''))
 const language = computed(() => String(props.block.content.language || 'text'))
 const level = computed(() => Number(props.block.content.level || 2))
 const isOrdered = computed(() => Boolean(props.block.content.ordered))
-const listText = computed(() => {
-  const items = props.block.content.items as string[] | undefined
-  return items?.join(', ') || String(props.block.content.text || '')
+
+interface ListRowItem {
+  text: string
+  checked: boolean
+  indent: number
+}
+
+/** 列表项归一：兼容 items(对象/字符串数组) 与旧数据的 text 单行 */
+const listItems = computed<ListRowItem[]>(() => {
+  const content = props.block.content || {}
+  const raw = content.items
+  const rows: ListRowItem[] = []
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === 'object' && item !== null) {
+        rows.push({
+          text: String((item as { text?: unknown }).text ?? ''),
+          checked: Boolean((item as { checked?: unknown }).checked),
+          indent: Number((item as { indent?: unknown }).indent ?? 0),
+        })
+      } else {
+        rows.push({ text: String(item), checked: false, indent: 0 })
+      }
+    }
+  }
+  const singleText = typeof content.text === 'string' ? content.text : ''
+  if (!rows.length && singleText.trim()) {
+    rows.push({ text: singleText.trim(), checked: false, indent: 0 })
+  }
+  return rows
+})
+
+/** 有序列表在同一块内连号（start 起）；无序/任务为圆点；嵌套(indent>0) 以圆点子项表达 */
+const listRows = computed(() => {
+  let num = Number((props.block.content as Record<string, unknown>).start ?? 1) - 1
+  return listItems.value.map((item) => {
+    let label = '•'
+    if (isOrdered.value && (item.indent || 0) <= 0) {
+      num += 1
+      label = `${num}.`
+    }
+    return { ...item, label }
+  })
 })
 const linkTitle = computed(() => String(props.block.content.title || ''))
 const pageId = computed(() => Number(props.block.content.page_id || 0))
@@ -766,16 +814,6 @@ const dividerStyleName = computed(() => {
 const imageUrl = computed(() => String(props.block.content.url || ''))
 const imageAlt = computed(() => String(props.block.content.alt || ''))
 const isTask = computed(() => Boolean(props.block.content.task))
-const listItems = computed(() => {
-  const raw = props.block.content.items
-  if (Array.isArray(raw)) {
-    return raw.map((item: unknown) => {
-      if (typeof item === 'object' && item !== null) return item as { text: string; checked?: boolean }
-      return { text: String(item), checked: false }
-    })
-  }
-  return []
-})
 const tableData = computed(() => ({
   headers: (props.block.content.headers as string[]) || [],
   rows: (props.block.content.rows as string[][]) || [],
@@ -1052,6 +1090,8 @@ async function startEdit(e?: MouseEvent) {
       // 聚焦第一个表头输入框
       const firstInput = (inputRef.value as HTMLElement)?.closest('.overflow-x-auto')?.querySelector('input')
       if (firstInput instanceof HTMLInputElement) firstInput.focus()
+    } else if (props.block.type === 'list') {
+      editText.value = listItems.value.map((x) => x.text).join('\n')
     } else {
       editText.value = text.value
     }
@@ -1108,19 +1148,22 @@ function onPaste(e: ClipboardEvent) {
 async function handleImagePaste(blob: Blob) {
   try {
     const file = new File([blob], `paste-${Date.now()}.png`, { type: blob.type || 'image/png' })
-    const { data } = await filesApi.upload(file)
-    if (data.url) {
+    const pid = useOrgStore().activeProject?.id
+    if (!pid) return
+    const { data } = await filesApi.upload(pid, file, 'asset')
+    const url = filesApi.contentUrl(data.id)
+    if (url) {
       // 如果当前 Block 是空段落，转换为图片 Block
       const isEmpty = !text.value && ['paragraph', 'heading'].includes(props.block.type)
       if (isEmpty) {
         editing.value = false
-        emit('save', { ...props.block.content, url: data.url, alt: '' })
+        emit('save', { ...props.block.content, url, alt: '' })
         emit('changeType', 'image')
       } else {
         // 保存当前内容，并在下方创建新的图片 Block
         editing.value = false
         emit('save', { ...props.block.content, text: editText.value })
-        emit('createImage', data.url)
+        emit('createImage', url)
       }
     }
   } catch {
@@ -1188,11 +1231,27 @@ function onEnterInEditList() {
 
 function saveListEdit() {
   if (!editing.value) return
-  const newText = editText.value.trim()
+  const lines = editText.value.split('\n').map((l) => l.trim()).filter(Boolean)
+  const items = lines.map((line) => ({ text: line, checked: false, indent: 0 }))
   editing.value = false
-  if (newText !== text.value) {
-    emit('save', { ...props.block.content, items: [newText], text: newText })
+  const content: Record<string, unknown> = { ...props.block.content }
+  if (items.length) {
+    content.items = items
+  } else {
+    delete content.items
+    content.text = ''
   }
+  if (isTask.value) {
+    content.task = true
+    content.ordered = false
+  } else if (isOrdered.value) {
+    content.ordered = true
+    content.start = Number((props.block.content as Record<string, unknown>).start ?? 1)
+  } else {
+    content.ordered = false
+  }
+  delete content.text // 文本统一存 items，避免 stale text 干扰渲染
+  emit('save', content)
 }
 
 /** 将弹出面板调整到视口内：如果下方放不下则翻转到触发元素上方，右边界溢出则向左偏移 */
@@ -1284,7 +1343,7 @@ function onTableEnter(e: KeyboardEvent, _source: string, _ri?: number, _ci?: num
 
 function cancelEdit() {
   editing.value = false
-  editText.value = text.value
+  editText.value = props.block.type === 'list' ? listItems.value.map((x) => x.text).join('\n') : text.value
 }
 
 // ===== 行内 Markdown → HTML 渲染 =====
@@ -1314,7 +1373,6 @@ function renderInlineMarkdown(text: string): string {
 }
 
 const formattedText = computed(() => renderInlineMarkdown(text.value))
-const formattedListText = computed(() => renderInlineMarkdown(listText.value))
 const placeholderClass = 'text-slate-400 select-none'
 
 // ===== 代码语法高亮 =====
@@ -1510,7 +1568,9 @@ function checkMarkdownShortcut(input: string): { type?: string; content: Record<
 }
 
 function navigateToPage() {
-  if (pageId.value) emit('navigate', pageId.value)
+  // v3 起笔记 id 为 uuid：优先取 note_id，兼容旧数据 page_id
+  const target = (props.block.content.note_id ?? props.block.content.page_id) as unknown
+  if (target && String(target) !== '0') emit('navigate', target as never)
 }
 
 async function copyCode() {
@@ -1520,11 +1580,11 @@ async function copyCode() {
 }
 
 async function toggleTaskItem(index: number) {
-  const items = [...listItems.value]
-  if (items[index]) {
-    items[index] = { ...items[index], checked: !items[index].checked }
-    emit('save', { ...props.block.content, items })
-  }
+  const items = listItems.value.map((it, i) => ({
+    ...it,
+    checked: i === index ? !it.checked : it.checked,
+  }))
+  emit('save', { ...props.block.content, task: true, ordered: false, items })
 }
 </script>
 
