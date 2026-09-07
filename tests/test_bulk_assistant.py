@@ -105,6 +105,46 @@ def test_assistant_chat_proxy(client, register, monkeypatch):
     assert "LLM_API_KEY" in r2.json()["detail"]
 
 
+def test_assistant_chat_stream_sse(client, register, monkeypatch):
+    """SSE 流式：逐 delta 事件下发并以 [DONE] 结束（用 yield 的生成器）"""
+    headers, _ = register("ast_sse")
+    import app.routers.assistant as assistant_router
+
+    def fake_stream(messages, base_url=None, api_key=None, model=None, temperature=0.7):
+        for piece in ("你", "好", "！流式回复。"):
+            yield piece
+
+    monkeypatch.setattr(assistant_router, "llm_chat_stream", fake_stream)
+    with client.stream(
+        "POST", "/api/v1/assistant/chat/stream", headers=headers,
+        json={"messages": [{"role": "user", "content": "你好"}], "model": "m"},
+    ) as resp:
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        body = "".join(resp.iter_text())
+    assert '"delta": "你"' in body
+    assert '"delta": "好"' in body
+    assert "[DONE]" in body
+
+
+def test_assistant_stream_error_event(client, register, monkeypatch):
+    """流式过程 RuntimeError → 以 error 事件下发且仍 [DONE]"""
+    headers, _ = register("ast_sse_e")
+    import app.routers.assistant as assistant_router
+
+    def boom(*_a, **_k):
+        raise RuntimeError("密钥缺失")
+
+    monkeypatch.setattr(assistant_router, "llm_chat_stream", boom)
+    with client.stream(
+        "POST", "/api/v1/assistant/chat/stream", headers=headers,
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    ) as resp:
+        body = "".join(resp.iter_text())
+    assert "error" in body and "密钥缺失" in body
+    assert "[DONE]" in body
+
+
 def test_embedding_provider_configured(monkeypatch):
     """远程 provider 需 base_url/api_key/model 齐备才视为已配置"""
     from app.core.config import settings

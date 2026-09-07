@@ -33,6 +33,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/root/.cache/huggingface \
     STORAGE_ROOT=/app/storage
 
 # 按 uv.lock 冻结安装（ENABLE_AI=1 时附带可选 AI 依赖）
@@ -48,6 +49,7 @@ COPY app/ ./app/
 COPY alembic.ini ./
 COPY alembic/ ./alembic/
 COPY wait_services.py /app/wait_services.py
+COPY preload_model.py /app/preload_model.py
 COPY .env.example ./.env.example
 
 # 前端 SPA（由宿主构建的 frontend/dist 提供）

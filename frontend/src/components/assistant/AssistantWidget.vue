@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { assistantApi, type ChatMsg } from '@/api/assistant'
+import { assistantApi, streamAssistantChat, type ChatMsg } from '@/api/assistant'
 import { ragApi } from '@/api/files'
 import { useAssistantStore } from '@/stores/assistant'
 import { useOrgStore } from '@/stores/org'
@@ -94,14 +94,32 @@ async function send() {
       ragSources.value = data.sources || []
     } else {
       const history = messages.value.slice(0, -1)
-      const { data } = await assistantApi.chat([...history, { role: 'user', content: text }], {
+      const overrides = {
         base_url: settings.llm.base_url,
         api_key: settings.llm.api_key,
         model: settings.llm.model,
         temperature: settings.llm.temperature,
         system: settings.llm.system,
-      })
-      messages.value.push({ role: 'assistant', content: data.reply || '（空回复）' })
+      }
+      const lastIdx = messages.value.length
+      messages.value.push({ role: 'assistant', content: '' })
+      try {
+        const reply = await streamAssistantChat(
+          [...history, { role: 'user', content: text }],
+          overrides,
+          (delta) => {
+            messages.value[lastIdx].content += delta
+          },
+        )
+        if (!messages.value[lastIdx].content && reply) {
+          messages.value[lastIdx].content = reply
+        }
+        if (!messages.value[lastIdx].content) messages.value[lastIdx].content = '（空回复）'
+      } catch (e2: unknown) {
+        const err = e2 as Error
+        messages.value.splice(lastIdx, 1)
+        throw err
+      }
     }
   } catch (e: unknown) {
     const err = e as { response?: { data?: { detail?: string } } }

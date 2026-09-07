@@ -143,6 +143,18 @@ EMBEDDING_DIM=1024                                      # 建议显式配置，�
 - LLM 覆盖配置：base_url / api_key / model / temperature / system prompt（存浏览器本地，随请求转发）；
 - DIY：悬浮球图案/尺寸/背景、面板背景、问候语，以及自定义 CSS/JS（作用于 `.taot-assistant-*` 类名，可做字体/动效等）。
 
+## Docker：安装本地 Embedding（torch + BGE-M3）并防重复加载
+
+```bash
+# 构建包含 torch + sentence-transformers 的镜像（首次下载较大，一次性）
+docker compose build --build-arg ENABLE_AI=1 backend worker beat
+# 启动：backend/worker 入口会自动执行 preload_model.py 预热
+# 模型缓存于命名卷 taot_hf_cache（HF_HOME），重启不重复下载；首次拉取较慢
+```
+
+未启用 AI 或模型未配置时，preload 会打印提示并正常跳过；远程 Embedding
+（`EMBEDDING_PROVIDER=api`）同样无需本地模型。
+
 ## 权限模型
 
 - **RBAC（组织/项目级）**：`owner > admin > maintainer > reporter > guest`；
