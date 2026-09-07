@@ -74,7 +74,8 @@ async function handleRegister() {
   error.value = ''
   try {
     await auth.register(form)
-    router.push('/')
+    // 新用户进入职业 + 技术栈两步引导（可跳过，用于推荐冷启动）
+    router.push('/onboarding')
   } catch {
     error.value = '注册失败，用户名或邮箱可能已存在'
   }

@@ -19,6 +19,8 @@ from app.routers import (
     files,
     rag,
     recommendations,
+    profile,
+    imports,
     hotspots,
     convert,
 )
@@ -73,7 +75,9 @@ app.include_router(notes.items, prefix=PREFIX)
 app.include_router(blocks.router, prefix=PREFIX)
 app.include_router(files.router, prefix=PREFIX)
 app.include_router(rag.router, prefix=PREFIX)
+app.include_router(profile.router, prefix=PREFIX)
 app.include_router(recommendations.router, prefix=PREFIX)
+app.include_router(imports.router, prefix=PREFIX)
 app.include_router(hotspots.router, prefix=PREFIX)
 app.include_router(convert.router, prefix=PREFIX)
 

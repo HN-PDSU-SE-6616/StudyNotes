@@ -23,6 +23,19 @@
       </div>
     </header>
 
+    <!-- 画像未完善提示条（推荐冷启动引导） -->
+    <div v-if="needProfile" class="bg-amber-50 border-b border-amber-100">
+      <div class="max-w-6xl mx-auto px-4 py-2.5 flex items-center gap-3 flex-wrap">
+        <span class="text-sm text-amber-700">✨ 完善兴趣画像，让「为你推荐」更懂你</span>
+        <button
+          class="ml-auto px-3 py-1 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 transition-colors"
+          @click="router.push('/onboarding')"
+        >
+          去完善（选择职业 + 技术栈）
+        </button>
+      </div>
+    </div>
+
     <main class="max-w-6xl mx-auto px-4 py-8 space-y-10">
       <!-- 组织/项目 -->
       <section>
@@ -126,6 +139,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
 import { useHotspotStore } from '@/stores/hotspot'
 import { orgsApi } from '@/api/orgs'
+import { profileApi } from '@/api/profile'
 import { recommendationsApi } from '@/api/files'
 import HotspotSection from '@/components/hotspot/HotspotSection.vue'
 import type { OrgWithRole, ProjectWithRole, RecommendationItem } from '@/types'
@@ -141,6 +155,7 @@ const hotspot = useHotspotStore()
 
 const loading = ref(true)
 const recoLoading = ref(true)
+const needProfile = ref(false)
 const recommendations = ref<RecommendationItem[]>([])
 const orgCards = ref<OrgCard[]>([])
 const createOrgOpen = ref(false)
@@ -165,6 +180,14 @@ async function load() {
     )
   } finally {
     loading.value = false
+  }
+  try {
+    const [{ data }] = await Promise.all([
+      profileApi.get().catch(() => ({ data: null as unknown as { job_role: string | null } })),
+    ])
+    needProfile.value = !data?.job_role
+  } catch {
+    needProfile.value = false
   }
   try {
     const { data } = await recommendationsApi.list()

@@ -50,6 +50,7 @@ from app.models.note import (
     NoteDetail,
     NoteStats,
 )
+from app.models.profile import ProfileRead, ProfileUpdate, UserProfile
 from app.models.file import (
     FileMetadata,
     FileRead,
@@ -70,4 +71,5 @@ __all__ = [
     "NoteCreate", "NoteUpdate", "NoteRead", "NoteTreeNode",
     "NoteBlockCreate", "NoteBlockUpdate", "NoteBlockRead", "NoteDetail", "NoteStats",
     "FileMetadata", "FileRead", "FileStatus", "FilePurpose",
+    "UserProfile", "ProfileRead", "ProfileUpdate",
 ]

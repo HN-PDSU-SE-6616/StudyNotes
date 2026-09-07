@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     # 每个文件的解析超时保护（秒，防止超大文件阻塞 worker）
     parse_max_file_size_mb: int = 100
 
+    # --- 推荐权重（加权混合：画像/行为/热度/时效，和须≈1） ---
+    rec_w_profile: float = 0.40
+    rec_w_read: float = 0.25
+    rec_w_pop: float = 0.25
+    rec_w_fresh: float = 0.10
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

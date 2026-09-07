@@ -90,10 +90,30 @@ uv run pytest -q
    → file_metadata(COMPLETED) → Celery index_note：chunker 切片(带 heading_path/page/anchor)
    → Qdrant kb_notes（payload 含 org/project/owner/is_public 权限过滤字段）
 提问 → /api/v1/rag/ask：检索(权限过滤) → 上下文 → DeepSeek → 答案 + sources(锚点)
-推荐 → Celery beat 每日刷新兴趣向量(user_profiles) → Redis 缓存 → /api/v1/recommendations
+推荐 → Celery beat 每日刷新：画像(职业+技术栈)与行为兴趣向量(user_profiles) → Redis 缓存 → /api/v1/recommendations
 ```
 
 引用跳转：前端按 `heading_path` / `page` 定位并滚动高亮笔记原文对应章节。
+
+## 导入与内容解析（v3.2 恢复 v2 语义）
+
+- **单文件**：`POST /api/v1/files/upload`（purpose=document）→ Celery 解析为笔记；
+  Markdown 支持有序/无序/任务列表连续项、表格转义、TOC 剥离、图片相对路径改写；
+  HTML 支持 ul/ol 嵌套列表、table/blockquote/pre/img；标题默认取自首个 H1。
+- **目录/多文件批量**：`POST /api/v1/projects/{id}/import`（multipart，filename 保留
+  `webkitRelativePath`）→ 目录结构 = Note 树；`image/media/...` 资源目录自动上传为
+  asset 并改写引用；跨文档 `[x](dir/a.md)` 链接修复为 `/notes/{slug}` 跳转；
+  重复导入由 `note.source_path` 幂等判定（overwrite=false 跳过 / true 重建）。
+- **列表块协议**：相邻同型列表合并为一个 list 块的多行 `items`，有序编号在同一块内连号；
+  前端 BlockRenderer 逐行渲染（含缩进层级 indent），无 `[object Object]` 与固定 `1.` 问题。
+
+## 推荐（冷启动 + 加权混合）
+
+- 新用户注册进入 `/onboarding` 两步引导（职业 → 技术栈多选，均可自定义；可跳过）。
+- 画像存 `user_profile`，即时/每日刷新为画像向量与行为兴趣向量。
+- 排序分：`0.40×画像相似度 + 0.25×行为相似度 + 0.25×热度(浏览量归一) + 0.10×时效衰减`
+  （权重在 `.env` 用 `REC_W_PROFILE/REC_W_READ/REC_W_POP/REC_W_FRESH` 调整；
+  缺少行为时其权重并入画像，反之亦然；无画像无行为时以热门+时效兜底）。
 
 ## 权限模型
 
@@ -107,12 +127,13 @@ uv run pytest -q
 ```
 app/
   core/           配置 · JWT · 权限中间层(RBAC/ABAC)
-  models/         user/org/project/note/file（SQLModel + PG JSONB）
-  routers/        auth · orgs · projects · notes · blocks · files · rag · recommendations
-  services/       note_service · parser(文档解析) · chunker · embedding · qdrant_service · rag · storage
-  tasks/          Celery：parse(解析) · index(向量) · recommend(推荐)
+  models/         user/org/project/note/file/profile（SQLModel + PG JSONB）
+  routers/        auth · orgs · projects · notes · blocks · files · imports · profile · rag · recommendations
+  services/       note_service · parser(文档解析) · importer(树导入) · careers(画像词典)
+                  · chunker · embedding · qdrant_service · rag · storage
+  tasks/          Celery：parse(解析) · index(向量) · recommend(加权混合推荐)
   worker.py       Celery 应用（队列 parse/index + beat 调度）
-alembic/         数据库迁移（基线 + note_view_log）
+alembic/         数据库迁移（基线 + note.source_path + user_profile）
 db/partition/    表分区启用指引（预留）
 frontend/        Vue3 + Pinia + Tailwind；组织/项目切换、移动端抽屉、AI 问答面板
 docker-compose.yml  backend · worker · beat（基础服务由 deploy/infra.ps1 独立运行）
@@ -126,6 +147,9 @@ wait_services.py    容器启动依赖等待（backend/worker/beat 入口）
 - 注册自动创建个人组织/项目；RBAC 隔离（跨用户访问统一 404 不泄露）；
 - 组织邀请 reporter 后只读可访问、写操作 403；
 - 笔记/Block CRUD、统计浏览计数；文件 asset 上传/读回一致；
-- slug 解析与项目关系图接口。
+- slug 解析与项目关系图接口；
+- 解析器协议（有序/无序/任务合并、表格转义、TOC、HTML 嵌套列表）；
+- 目录导入成树 + 图片上链 + 链接修复 + overwrite 幂等；
+- 画像 CRUD 与推荐权重归一。
 
 （v3.1 起已移除引用旧 SQLite 模型的历史测试。）
