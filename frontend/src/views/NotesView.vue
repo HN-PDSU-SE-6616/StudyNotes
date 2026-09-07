@@ -53,16 +53,6 @@
           <div class="text-sm font-semibold text-slate-700 truncate">{{ orgStore.activeProject?.name || '知识库' }}</div>
           <div class="text-[10px] text-slate-400 truncate">{{ orgStore.activeOrg?.name }}</div>
         </div>
-        <button
-          class="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
-          :class="{ 'text-brand-600 bg-brand-50': aiOpen }"
-          title="AI 问答"
-          @click="aiOpen = !aiOpen"
-        >
-          <svg class="w-4.5 h-4.5 w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h4M9 17H7a2 2 0 01-2-2V5a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2h-2l-4 4v-4" />
-          </svg>
-        </button>
       </header>
 
       <PageEditor
@@ -75,27 +65,7 @@
       </div>
     </div>
 
-    <!-- ===== AI 问答抽屉（右侧） ===== -->
-    <Transition name="slide-right">
-      <div
-        v-if="aiOpen"
-        class="fixed right-0 top-0 bottom-0 z-50 w-[min(92vw,420px)] shadow-2xl md:static md:z-auto md:shadow-none md:border-l md:border-slate-200"
-      >
-        <RagPanel @close="aiOpen = false" @open-source="openSource" />
-      </div>
-    </Transition>
-    <button
-      v-if="!aiOpen && orgStore.activeProject"
-      class="hidden md:flex fixed bottom-6 right-6 z-30 items-center gap-2 px-4 py-3 rounded-2xl bg-brand-600 text-white text-sm font-medium shadow-lg hover:bg-brand-700 transition-colors"
-      @click="aiOpen = true"
-    >
-      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h4M9 17H7a2 2 0 01-2-2V5a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2h-2l-4 4v-4" />
-      </svg>
-      AI 问答
-    </button>
-
-    <!-- 创建项目弹窗 -->
+    <!-- ===== 主区域 ===== -->
     <Teleport to="body">
       <div v-if="createDialog" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" @click.self="createDialog = false">
         <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl">
@@ -123,9 +93,8 @@ import { useOrgStore } from '@/stores/org'
 import { orgsApi } from '@/api/orgs'
 import NotesSidebar from '@/components/notes/NotesSidebar.vue'
 import PageEditor from '@/components/notes/PageEditor.vue'
-import RagPanel from '@/components/rag/RagPanel.vue'
 import ContextBar from '@/components/notes/ContextBar.vue'
-import type { PageTreeNode, RagSource } from '@/types'
+import type { PageTreeNode } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -133,7 +102,6 @@ const pageStore = usePageStore()
 const orgStore = useOrgStore()
 
 const mobileDrawer = ref(false)
-const aiOpen = ref(false)
 const createDialog = ref(false)
 const newProjectName = ref('')
 
@@ -236,16 +204,6 @@ async function onCreatePageMobile(parentId?: string) {
   mobileDrawer.value = false
 }
 
-async function openSource(src: RagSource) {
-  const target = notePath(src.slug, src.project_id)
-  // 同项目直接携带 anchor 跳转
-  if (src.project_id === orgStore.activeProject?.id) {
-    router.push({ path: `/notes/${src.slug}`, query: { project: src.project_id, anchor: src.anchor || src.heading_path } })
-  } else {
-    router.push({ path: '/notes', query: { project: src.project_id } })
-  }
-  mobileDrawer.value = false
-}
 
 function findPageById(nodes: PageTreeNode[], id: string): PageTreeNode | null {
   for (const n of nodes) {
