@@ -15,10 +15,12 @@ export interface AssistantSettings {
   size: number
   theme: 'light' | 'dark'
   ballBg: string
+  ballOpacity: number          // 悬浮球整体透明度 0.4~1
   ballIcon: string
   ballIconUrl: string
   greeting: string
-  panelBg: string
+  panelBg: string               // 面板背景（渐变/色，留空随主题）
+  panelImage: string            // 面板背景上传图片（dataURL，优先生效）
   mode: 'chat' | 'rag'
   effectOn: boolean
   effectType: 'float' | 'pulse' | 'glow' | 'none'
@@ -54,10 +56,12 @@ export const DEFAULT_SETTINGS: AssistantSettings = {
   size: 54,
   theme: 'light',
   ballBg: 'linear-gradient(135deg,#6366f1,#a855f7)',
+  ballOpacity: 1,
   ballIcon: '🤖',
   ballIconUrl: '',
   greeting: '你好呀 👋 我是你的 AI 助手，想问点什么？',
   panelBg: '',
+  panelImage: '',
   mode: 'chat',
   effectOn: true,
   effectType: 'float',

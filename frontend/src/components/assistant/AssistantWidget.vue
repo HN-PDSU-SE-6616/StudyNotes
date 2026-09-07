@@ -22,6 +22,7 @@ const input = ref('')
 const ragSources = ref<RagSource[]>([])
 const listRef = ref<HTMLDivElement>()
 const iconFile = ref<HTMLInputElement>()
+const panelImgInput = ref<HTMLInputElement>()
 
 // 会话：固定 session_id（清空上下文后重置），服务端按用户记忆最近对话
 const SESSION_KEY = 'taot.assistant.session'
@@ -33,9 +34,17 @@ const ballStyle = computed(() => ({
   height: `${settings.size}px`,
   background: settings.ballBg || 'linear-gradient(135deg,#6366f1,#a855f7)',
   fontSize: `${Math.max(16, settings.size * 0.52)}px`,
+  opacity: settings.ballOpacity,
 }))
+const surface = settings.theme === 'dark' ? '#111827' : '#ffffff'
+const panelBg = settings.panelBg || ''
+const isGradientBg = /gradient|url\(/i.test(panelBg)
 const panelVars = computed(() => ({
-  '--ap-bg': settings.panelBg || (settings.theme === 'dark' ? '#111827' : '#ffffff'),
+  '--ap-surface': surface,
+  '--ap-msgs-bg': settings.theme === 'dark' ? 'rgba(17, 24, 39, 0.82)' : 'rgba(255, 255, 255, 0.85)',
+  '--ap-bg-layer': isGradientBg ? panelBg : 'none',
+  '--ap-bg-color': (!isGradientBg && panelBg) ? panelBg : surface,
+  '--ap-img': settings.panelImage ? `url("${settings.panelImage}")` : 'none',
   '--ap-text': settings.theme === 'dark' ? '#e5e7eb' : '#1f2937',
   '--ap-sub': settings.theme === 'dark' ? '#9ca3af' : '#64748b',
   '--ap-bubble': settings.theme === 'dark' ? '#1f2937' : '#ffffff',
@@ -139,6 +148,22 @@ function onIconUpload(e: Event) {
   input.value = ''
 }
 
+function onPanelImageUpload(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (file.size > 3_000_000) {
+    alert('面板背景图请控制在 3MB 以内')
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => {
+    settings.panelImage = String(reader.result || '')
+  }
+  reader.readAsDataURL(file)
+  input.value = ''
+}
+
 function applyDiy() {
   applyCustomCss(settings.customCss)
   runCustomJs(settings.customJs)
@@ -155,10 +180,12 @@ function resetDiy() {
     size: 54,
     theme: 'light',
     ballBg: BALL_BG_COLORS[0],
+    ballOpacity: 1,
     ballIcon: '🤖',
     ballIconUrl: '',
     greeting: '你好呀 👋 我是你的 AI 助手，想问点什么？',
     panelBg: '',
+    panelImage: '',
     mode: cur.mode,
     effectOn: true,
     effectType: 'float',
@@ -286,6 +313,11 @@ onMounted(() => {
             <input v-model.number="settings.size" type="range" min="36" max="120" class="ap-range" />
             <b class="ap-val">{{ settings.size }}px</b>
           </label>
+          <label class="ap-label-row">
+            <span>透明度</span>
+            <input v-model.number="settings.ballOpacity" type="range" min="0.4" max="1" step="0.05" class="ap-range" />
+            <b class="ap-val">{{ Math.round(settings.ballOpacity * 100) }}%</b>
+          </label>
           <div class="ap-label">
             <span>图标</span>
             <div class="ap-icon-grid">
@@ -343,6 +375,15 @@ onMounted(() => {
               <option v-for="ch in PANEL_BG_CHOICES" :key="ch.value" :value="ch.value">{{ ch.label }}</option>
             </select>
           </label>
+          <div class="ap-label">
+            <span>背景图（上传后优先生效）</span>
+            <div class="ap-inline">
+              <button class="ap-btn-soft" @click="panelImgInput?.click()">🖼 上传背景图</button>
+              <button v-if="settings.panelImage" class="ap-btn-soft" @click="settings.panelImage = ''">移除图片</button>
+              <input ref="panelImgInput" type="file" accept="image/*" class="hidden" @change="onPanelImageUpload" />
+            </div>
+            <img v-if="settings.panelImage" :src="settings.panelImage" class="ap-panel-preview" alt="panel bg preview" />
+          </div>
           <label class="ap-label-row">
             <span>对话方式</span>
             <select v-model="settings.mode" class="ap-input-sm w-auto">
@@ -451,7 +492,11 @@ onMounted(() => {
   border-radius: 1.25rem;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.3);
   border: 1px solid var(--ap-panel-border);
-  background: var(--ap-bg);
+  background-color: var(--ap-bg-color);
+  background-image: var(--ap-img, none), var(--ap-bg-layer, none);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover, auto;
   color: var(--ap-text);
   display: flex;
   flex-direction: column;
@@ -481,7 +526,8 @@ onMounted(() => {
 .ap-msgs {
   flex: 1; overflow-y: auto; padding: 0.75rem;
   display: flex; flex-direction: column; gap: 0.6rem;
-  background: var(--ap-bg);
+  background: var(--ap-msgs-bg);
+  backdrop-filter: blur(3px);
 }
 .ap-row { display: flex; }
 .ap-row-user { justify-content: flex-end; }
@@ -510,7 +556,7 @@ onMounted(() => {
 .ap-inputbar {
   display: flex; gap: 0.5rem; align-items: flex-end;
   padding: 0.5rem; border-top: 1px solid var(--ap-panel-border);
-  background: var(--ap-bg); flex-shrink: 0;
+  background: transparent; flex-shrink: 0;
 }
 .ap-input {
   flex: 1; resize: none; padding: 8px 10px; border-radius: 12px;
@@ -525,7 +571,7 @@ onMounted(() => {
 .ap-send:disabled { opacity: 0.4; }
 
 /* ============ 设置面板 ============ */
-.ap-settings { flex: 1; overflow-y: auto; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.9rem; background: var(--ap-bg); }
+.ap-settings { flex: 1; overflow-y: auto; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.9rem; background: var(--ap-msgs-bg); backdrop-filter: blur(3px); }
 .ap-sec { display: flex; flex-direction: column; gap: 0.5rem; }
 .ap-sec-title { font-size: 12px; font-weight: 600; color: var(--ap-sub); margin: 0; }
 .ap-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ap-sub); }
@@ -553,6 +599,10 @@ onMounted(() => {
 }
 .ap-color-opt.active { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3); }
 .ap-color-custom { width: 30px; height: 30px; border: none; background: none; cursor: pointer; }
+.ap-panel-preview {
+  width: 100%; height: 64px; object-fit: cover; border-radius: 10px;
+  border: 1px solid var(--ap-bubble-line);
+}
 
 .ap-seg { display: inline-flex; border: 1px solid var(--ap-bubble-line); border-radius: 10px; overflow: hidden; }
 .ap-seg-item {
