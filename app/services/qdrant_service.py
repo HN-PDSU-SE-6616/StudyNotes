@@ -29,7 +29,7 @@ def get_client() -> QdrantClient:
 
 
 def ensure_collections(vector_size: Optional[int] = None) -> None:
-    """幂等创建 collection（含权限过滤所需 payload index）"""
+    """幂等创建 collection（含权限过滤所需 payload index）；已存在时校验维度对齐"""
     client = get_client()
     dim = vector_size or 1024
     for name in (KB_NOTES_COLLECTION, USER_PROFILES_COLLECTION):
@@ -39,6 +39,20 @@ def ensure_collections(vector_size: Optional[int] = None) -> None:
                 vectors_config=models.VectorParams(size=dim, distance=models.Distance.COSINE),
             )
             logger.info("Qdrant collection 已创建: %s (dim=%s)", name, dim)
+        elif vector_size is not None:
+            # 校验与向量库对齐：维度不一致给出可操作的报错，避免静默写入失败
+            info = client.get_collection(name)
+            exist_dim = None
+            try:
+                exist_dim = info.config.params.vectors.size
+            except Exception:  # noqa: BLE001
+                exist_dim = getattr(getattr(info.config.params.vectors, "size", None), None, None)
+            if exist_dim and exist_dim != dim:
+                raise RuntimeError(
+                    f"Qdrant collection「{name}」当前维度 {exist_dim} 与 Embedding 输出维度 "
+                    f"{dim} 不一致。请对齐 EMBEDDING_MODEL/EMBEDDING_DIM 配置，或删除 collection/清空 "
+                    f"qdrant_storage 卷后重建。"
+                )
 
     # kb_notes 权限/路由过滤字段索引
     indexes = [

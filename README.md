@@ -115,6 +115,34 @@ uv run pytest -q
   （权重在 `.env` 用 `REC_W_PROFILE/REC_W_READ/REC_W_POP/REC_W_FRESH` 调整；
   缺少行为时其权重并入画像，反之亦然；无画像无行为时以热门+时效兜底）。
 
+## 批量清理（误导入修复）
+
+- 侧栏「我的页面 → 批量删除」：多选页面（每项含其子树）批量删除；
+- 「清空此项目的全部页面」：危险操作，清空当前项目整棵笔记树（需项目 Owner/Admin）。
+- 对应接口：`POST /api/v1/notes/batch-delete`、`DELETE /api/v1/projects/{id}/notes/`。
+
+## Embedding：本地 / 远程（OpenAI 兼容）
+
+默认本地（sentence-transformers，需 `uv sync --extra ai`）。如需免安装直接调用远程接口：
+
+```dotenv
+EMBEDDING_PROVIDER=api
+EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1   # OpenAI 兼容地址
+EMBEDDING_API_KEY=sk-xxx
+EMBEDDING_MODEL=BAAI/bge-m3                            # 服务端模型名
+EMBEDDING_DIM=1024                                      # 建议显式配置，与向量库维度一致
+```
+
+未配置或调用失败时 RAG/推荐/索引任务会给出可读错误并静默降级；Qdrant collection
+已存在但维度不一致时会明确报错，提示对齐 `EMBEDDING_DIM` 或重建 collection。
+
+## 悬浮 AI 助手（全局）
+
+登录后所有页面右下角悬浮球（可隐藏/找回）。面板支持：
+- 对话方式：自由对话（OpenAI 兼容，经 `POST /api/v1/assistant/chat` 代理）或知识库问答（RAG）；
+- LLM 覆盖配置：base_url / api_key / model / temperature / system prompt（存浏览器本地，随请求转发）；
+- DIY：悬浮球图案/尺寸/背景、面板背景、问候语，以及自定义 CSS/JS（作用于 `.taot-assistant-*` 类名，可做字体/动效等）。
+
 ## 权限模型
 
 - **RBAC（组织/项目级）**：`owner > admin > maintainer > reporter > guest`；

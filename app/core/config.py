@@ -1,5 +1,6 @@
 """应用配置 - 所有配置项可通过 .env 文件或环境变量覆盖"""
 from functools import lru_cache
+from typing import Optional
 
 from pydantic_settings import BaseSettings
 
@@ -33,7 +34,12 @@ class Settings(BaseSettings):
 
     # --- Embedding（空值表示 RAG/推荐功能关闭） ---
     embedding_model: str = ""
-
+    # provider: local=本地 sentence-transformers；api=OpenAI 兼容接口（SiliconFlow/OpenAI 等）
+    embedding_provider: str = "local"
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    # 远程接口向量的维度；建议显式配置并与 Qdrant collection 维度对齐（默认 1024）
+    embedding_dim: Optional[int] = None
     # --- LLM（OpenAI 兼容接口，如 DeepSeek） ---
     llm_api_key: str = ""
     llm_base_url: str = "https://api.deepseek.com/v1"

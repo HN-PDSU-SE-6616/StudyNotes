@@ -261,6 +261,51 @@ async def sync_link_blocks(
 
 # ---------- ABAC ACL ----------
 
+class BatchDeleteRequest(SQLModel):
+    note_ids: list[str]
+
+
+@items.post("/batch-delete", summary="批量删除笔记（每篇含子树）")
+async def batch_delete_notes(
+    body: BatchDeleteRequest,
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    deleted: list[str] = []
+    failed: list[str] = []
+    for nid in dict.fromkeys(body.note_ids or []):
+        try:
+            note, _ = await perm.require_note(nid, "delete")
+        except HTTPException:
+            failed.append(nid)
+            continue
+        await purge_note_tree(perm.session, note.id)
+        queue_delete_note_index(nid)
+        deleted.append(nid)
+    return {"deleted": deleted, "failed": failed,
+            "deleted_count": len(deleted), "failed_count": len(failed)}
+
+
+@collection.delete("/", summary="清空项目内全部笔记（危险）")
+async def clear_project_notes(
+    project_id: str,
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    await perm.require_project_role(project_id, OrgRole.ADMIN.value)
+    rows = await perm.session.execute(
+        select(Note).where(Note.project_id == project_id)
+    )
+    all_ids = [n.id for n in rows.scalars().all()]
+    total = len(all_ids)
+    root_rows = await perm.session.execute(
+        select(Note).where(Note.project_id == project_id, Note.parent_id.is_(None))
+    )
+    roots = [n.id for n in root_rows.scalars().all()]
+    for rid in roots:
+        await purge_note_tree(perm.session, rid)
+        queue_delete_note_index(rid)
+    return {"deleted_roots": len(roots), "notes_removed": total}
+
+
 class AclGrantRequest(SQLModel):
     username: str
     permission: str = "read"  # read / write / delete
