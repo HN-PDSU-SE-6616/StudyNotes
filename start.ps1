@@ -1,236 +1,178 @@
 # ============================================================
-#   Taot Knowledge Base v2.0 - One-Click Start (PowerShell)
-#   Usage: powershell -ExecutionPolicy Bypass -File start.ps1
+#   Taot Knowledge Base v3.1 - One-Click Start (uv) [PowerShell]
+#   Usage : powershell -ExecutionPolicy Bypass -File start.ps1
+#   依赖   : uv (>=0.5), Node.js (>=18), Docker (可选，用于基础设施)
+#   前置   : docker compose up -d postgres qdrant redis
 # ============================================================
 
 $ErrorActionPreference = 'Continue'
 
-# Get script directory as project root (all paths based on this)
+# 项目根目录（脚本所在目录）
 $ProjectRoot = $PSScriptRoot
 if (-not $ProjectRoot) { $ProjectRoot = Get-Location }
+Set-Location $ProjectRoot
+
+$Version = 'v3.1 (uv)'
 
 Write-Host '============================================' -ForegroundColor Cyan
-Write-Host '  Taot Knowledge Base v2.0 - One-Click Start' -ForegroundColor Cyan
+Write-Host "  Taot Knowledge Base $Version - One-Click Start" -ForegroundColor Cyan
 Write-Host '============================================' -ForegroundColor Cyan
 Write-Host ''
 
-# ==================== Environment Check ====================
-Write-Host '[1/5] Checking environment...' -ForegroundColor Yellow
+# ==================== 1/6 环境检查 ====================
+Write-Host '[1/6] 检查运行环境...' -ForegroundColor Yellow
 
-$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-if (-not $pythonCmd) {
-    Write-Host '[ERROR] Python not found, please install Python 3.9+' -ForegroundColor Red
-    Write-Host '         Download: https://www.python.org/downloads/' -ForegroundColor White
-    Write-Host ''
-    Read-Host 'After installation, press Enter to continue'
-    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $pythonCmd) {
-        Write-Host '[ERROR] Python still not found, exiting' -ForegroundColor Red
-        Read-Host 'Press Enter to exit'
-        exit 1
-    }
+# --- uv ---
+$uvCmd = Get-Command uv -ErrorAction SilentlyContinue
+if (-not $uvCmd) {
+    Write-Host '[ERROR] 未找到 uv，请先安装：' -ForegroundColor Red
+    Write-Host '        powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"' -ForegroundColor White
+    Read-Host '安装完成后按 Enter 继续（或 Ctrl+C 退出）'
+    $uvCmd = Get-Command uv -ErrorAction SilentlyContinue
+    if (-not $uvCmd) { exit 1 }
 }
+Write-Host "[OK] uv: $(uv --version)" -ForegroundColor Green
 
+# --- Node.js ---
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
 if (-not $nodeCmd) {
-    Write-Host '[ERROR] Node.js not found, please install Node.js 18+' -ForegroundColor Red
-    Write-Host '         Download: https://nodejs.org/' -ForegroundColor White
-    Write-Host ''
-    Read-Host 'After installation, press Enter to continue'
-    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
-    if (-not $nodeCmd) {
-        Write-Host '[ERROR] Node.js still not found, exiting' -ForegroundColor Red
-        Read-Host 'Press Enter to exit'
-        exit 1
-    }
+    Write-Host '[ERROR] 未找到 Node.js（需 18+），请安装：https://nodejs.org/' -ForegroundColor Red
+    Read-Host '安装完成后按 Enter 继续'
+    exit 1
 }
-
-# Verify Node.js version >= 18
 $nodeVersionRaw = (node --version 2>&1) -replace 'v', ''
 $nodeMajor = [int]($nodeVersionRaw -split '\.')[0]
 if ($nodeMajor -lt 18) {
-    Write-Host "[WARNING] Node.js version $($nodeCmd.Version) is below minimum required (18.x). Please upgrade to Node.js 18+ for full compatibility." -ForegroundColor Yellow
-    Write-Host '           Download: https://nodejs.org/' -ForegroundColor White
-    Write-Host '           The app may still work but some features might not be available.' -ForegroundColor Yellow
-    Write-Host ''
+    Write-Host '[WARNING] Node.js 版本过低（需 18+），当前：' + $nodeVersionRaw -ForegroundColor Yellow
 }
+Write-Host "[OK] Node.js: v$nodeVersionRaw" -ForegroundColor Green
 
-Write-Host "Python path: $($pythonCmd.Source)" -ForegroundColor Gray
-Write-Host "Python version: $($pythonCmd.Version)" -ForegroundColor Green
-Write-Host "Node.js path: $($nodeCmd.Source)" -ForegroundColor Gray
-Write-Host "Node.js version: $($nodeCmd.Version)" -ForegroundColor Green
-Write-Host '[OK] Python and Node.js ready' -ForegroundColor Green
+# --- Docker 基础设施（postgres/qdrant/redis） ---
+$dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
+if ($dockerCmd) {
+    Write-Host '[INFO] 正在确认基础设施容器（postgres/qdrant/redis）...' -ForegroundColor White
+    docker compose up -d postgres qdrant redis 2>&1 | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '[WARNING] 基础设施启动失败，请稍后手动执行：docker compose up -d postgres qdrant redis' -ForegroundColor Yellow
+    } else {
+        Write-Host '[OK] 基础设施已就绪' -ForegroundColor Green
+    }
+} else {
+    Write-Host '[WARNING] 未检测到 Docker，请确认 PostgreSQL/Qdrant/Redis 已由其他方式运行' -ForegroundColor Yellow
+}
 Write-Host ''
 
-# ==================== Auto-create Essential Files ====================
-Write-Host '[2/6] Checking essential files...' -ForegroundColor Yellow
+# ==================== 2/6 .env 与目录 ====================
+Write-Host '[2/6] 检查 .env 与运行目录...' -ForegroundColor Yellow
 
-# --- .env file ---
 $envFile = Join-Path $ProjectRoot '.env'
 $envExampleFile = Join-Path $ProjectRoot '.env.example'
 if (-not (Test-Path $envFile)) {
     if (Test-Path $envExampleFile) {
-        Write-Host '        .env not found, copying from .env.example (default config)...' -ForegroundColor White
         Copy-Item $envExampleFile $envFile
-        Write-Host "[OK] .env created from .env.example (path: $envFile)" -ForegroundColor Green
+        Write-Host '[OK] .env 已由 .env.example 生成' -ForegroundColor Green
     } else {
-        Write-Host '        .env and .env.example not found, creating .env with default config...' -ForegroundColor White
-        $defaultEnv = @'
+        @'
 # Taot Knowledge Base - Environment Config (auto-generated)
 SECRET_KEY=change-me-in-production-use-env-var
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 REFRESH_TOKEN_EXPIRE_DAYS=7
-DATABASE_URL=sqlite+aiosqlite:///./blog.db
-NOTES_DATA_PATH=data
-'@
-        Set-Content -Path $envFile -Value $defaultEnv -Encoding UTF8
-        Write-Host "[OK] .env created with default config (path: $envFile)" -ForegroundColor Green
+DATABASE_URL=postgresql+asyncpg://taot:taot@localhost:5432/taot
+QDRANT_URL=http://localhost:6333
+REDIS_URL=redis://localhost:6379/0
+STORAGE_ROOT=storage
+'@ | Set-Content -Path $envFile -Encoding UTF8
+        Write-Host '[OK] .env 已用默认配置创建' -ForegroundColor Green
     }
 } else {
-    Write-Host "[OK] .env already exists, skipping (path: $envFile)" -ForegroundColor Green
+    Write-Host '[OK] .env 已存在' -ForegroundColor Green
 }
 
-# --- Required directories ---
-$requiredDirs = @('uploads', 'static')
-foreach ($dir in $requiredDirs) {
-    $dirPath = Join-Path $ProjectRoot $dir
-    if (-not (Test-Path $dirPath)) {
-        New-Item -ItemType Directory -Path $dirPath -Force | Out-Null
-        Write-Host "[OK] Directory created: $dir" -ForegroundColor Green
-    } else {
-        Write-Host "[OK] Directory exists: $dir" -ForegroundColor Green
+foreach ($dir in @('uploads', 'static', 'storage')) {
+    if (-not (Test-Path (Join-Path $ProjectRoot $dir))) {
+        New-Item -ItemType Directory -Path (Join-Path $ProjectRoot $dir) -Force | Out-Null
     }
 }
-
+Write-Host '[OK] 运行目录就绪' -ForegroundColor Green
 Write-Host ''
 
-# ==================== Virtual Environment ====================
-Write-Host '[3/6] Configuring Python virtual environment...' -ForegroundColor Yellow
+# ==================== 3/6 Python 依赖（uv sync） ====================
+Write-Host '[3/6] 安装 Python 依赖（uv，Python 3.12）...' -ForegroundColor Yellow
 
-$venvPath = Join-Path $ProjectRoot 'venv'
-$activateScript = Join-Path $venvPath 'Scripts\Activate.ps1'
-
-if (-not (Test-Path $activateScript)) {
-    Write-Host "        Virtual environment not found, creating (target: $venvPath)..." -ForegroundColor White
-    Write-Host "        Command: python -m venv $venvPath" -ForegroundColor Gray
-    $venvOutput = python -m venv $venvPath 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host '[ERROR] Failed to create virtual environment' -ForegroundColor Red
-        Write-Host "        Exit code: $LASTEXITCODE" -ForegroundColor Red
-        if ($venvOutput) {
-            Write-Host '        Error details:' -ForegroundColor Red
-            Write-Host $venvOutput -ForegroundColor Red
-        }
-        Write-Host '        Possible cause: Python not properly installed, insufficient permissions, or special characters in path' -ForegroundColor Yellow
-        Read-Host 'Press Enter to exit'
-        exit 1
-    }
-    Write-Host '[OK] Virtual environment created' -ForegroundColor Green
+$lockFile = Join-Path $ProjectRoot 'uv.lock'
+if (Test-Path $lockFile) {
+    Write-Host '        执行 uv sync --frozen ...' -ForegroundColor Gray
+    uv sync --frozen
 } else {
-    Write-Host "[OK] Virtual environment already exists, skipping (path: $venvPath)" -ForegroundColor Green
+    Write-Host '        uv.lock 不存在，执行 uv sync ...' -ForegroundColor Gray
+    uv sync
 }
-
-& $activateScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '[ERROR] Python 依赖安装失败' -ForegroundColor Red
+    Read-Host '按 Enter 退出'
+    exit 1
+}
+Write-Host '[OK] Python 依赖就绪（uv run python --version）' -ForegroundColor Green
+uv run python --version
 Write-Host ''
 
-# ==================== Backend Dependencies ====================
-Write-Host '[4/6] Checking backend dependencies...' -ForegroundColor Yellow
-
-$requirementsFile = Join-Path $ProjectRoot 'requirements.txt'
-$fastapiCheck = pip show fastapi 2>$null
-if (-not $fastapiCheck) {
-    Write-Host "        Backend dependencies not installed, installing from $requirementsFile..." -ForegroundColor White
-    Write-Host "        Command: pip install -r $requirementsFile" -ForegroundColor Gray
-    $pipOutput = pip install -r $requirementsFile 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host '[ERROR] Backend dependencies installation failed' -ForegroundColor Red
-        Write-Host "        Exit code: $LASTEXITCODE" -ForegroundColor Red
-        if ($pipOutput) {
-            Write-Host '        Error details (last 20 lines):' -ForegroundColor Red
-            $errorLines = $pipOutput | Select-Object -Last 20
-            Write-Host ($errorLines -join "`n") -ForegroundColor Red
-        }
-        Write-Host '        Possible cause: Network failure, outdated pip version, or dependency version conflict' -ForegroundColor Yellow
-        Read-Host 'Press Enter to exit'
-        exit 1
-    }
-    Write-Host '[OK] Backend dependencies installed' -ForegroundColor Green
-} else {
-    Write-Host '[OK] Backend dependencies already installed, skipping' -ForegroundColor Green
+# ==================== 4/6 数据库迁移 ====================
+Write-Host '[4/6] 执行数据库迁移（alembic upgrade head）...' -ForegroundColor Yellow
+uv run alembic upgrade head
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '[ERROR] 数据库迁移失败，请确认 PostgreSQL 已启动且 .env 正确' -ForegroundColor Red
+    Read-Host '按 Enter 退出'
+    exit 1
 }
+Write-Host '[OK] 数据库迁移完成' -ForegroundColor Green
 Write-Host ''
 
-# ==================== Frontend Dependencies ====================
-Write-Host '[5/6] Checking frontend dependencies...' -ForegroundColor Yellow
-
+# ==================== 5/6 前端依赖 ====================
+Write-Host '[5/6] 检查前端依赖（npm）...' -ForegroundColor Yellow
 $frontendPath = Join-Path $ProjectRoot 'frontend'
-$nodeModulesPath = Join-Path $frontendPath 'node_modules'
-
-$viteModulePath = Join-Path $frontendPath 'node_modules\vite'
-$depsInstalled = Test-Path $viteModulePath
-
-if (-not $depsInstalled) {
-    Write-Host "        Frontend dependencies not installed, installing (working dir: $frontendPath, may take a few minutes)..." -ForegroundColor White
-    Write-Host '        Command: npm install' -ForegroundColor Gray
+if (-not (Test-Path (Join-Path $frontendPath 'node_modules\vite'))) {
     Push-Location $frontendPath
-    $npmOutput = npm install 2>&1
-    $npmExitCode = $LASTEXITCODE
+    npm install
+    $npmCode = $LASTEXITCODE
     Pop-Location
-    if ($npmExitCode -ne 0) {
-        Write-Host '[ERROR] Frontend dependencies installation failed' -ForegroundColor Red
-        Write-Host "        Exit code: $npmExitCode" -ForegroundColor Red
-        if ($npmOutput) {
-            Write-Host '        Error details (last 20 lines):' -ForegroundColor Red
-            $errorLines = $npmOutput | Select-Object -Last 20
-            Write-Host ($errorLines -join "`n") -ForegroundColor Red
-        }
-        Write-Host '        Possible cause: Network failure, Node.js version incompatible, or package.json configuration error' -ForegroundColor Yellow
-        Read-Host 'Press Enter to exit'
+    if ($npmCode -ne 0) {
+        Write-Host '[ERROR] 前端依赖安装失败' -ForegroundColor Red
+        Read-Host '按 Enter 退出'
         exit 1
     }
-    Write-Host '[OK] Frontend dependencies installed' -ForegroundColor Green
+    Write-Host '[OK] 前端依赖已安装' -ForegroundColor Green
 } else {
-    Write-Host "[OK] Frontend dependencies already installed, skipping (path: $viteModulePath)" -ForegroundColor Green
+    Write-Host '[OK] 前端依赖已存在' -ForegroundColor Green
 }
 Write-Host ''
 
-# ==================== Start Services ====================
-Write-Host '[6/6] Starting services...' -ForegroundColor Yellow
+# ==================== 6/6 启动服务 ====================
+Write-Host '[6/6] 启动服务（独立窗口）...' -ForegroundColor Yellow
 Write-Host ''
 
-Write-Host 'Starting backend server (http://127.0.0.1:8000)...' -ForegroundColor White
-Write-Host "        Working directory: $ProjectRoot" -ForegroundColor Gray
+$backendCmd = "Set-Location '$ProjectRoot'; uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000"
+$workerCmd  = "Set-Location '$ProjectRoot'; uv run celery -A app.worker.celery_app worker -Q parse,index -l info -P solo"
+$beatCmd    = "Set-Location '$ProjectRoot'; uv run celery -A app.worker.celery_app beat -l info"
+$frontCmd   = "Set-Location '$frontendPath'; npm run dev"
+
 try {
-    $backendProcess = Start-Process powershell `
-        -ArgumentList '-NoExit', '-Command', "Write-Host 'Taot-Backend - Backend Service' -ForegroundColor Cyan; Write-Host 'Activating virtual environment...' -ForegroundColor Gray; & '.\venv\Scripts\Activate.ps1'; Write-Host 'Starting uvicorn (http://127.0.0.1:8000)...' -ForegroundColor Gray; python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000" `
-        -WorkingDirectory $ProjectRoot `
-        -WindowStyle Normal `
-        -PassThru
-    Write-Host "        Backend process started (PID: $($backendProcess.Id))" -ForegroundColor Green
+    Start-Process powershell -ArgumentList '-NoExit', '-Command', "Write-Host 'Taot-Backend  http://127.0.0.1:8000' -ForegroundColor Cyan; $backendCmd"
+    Start-Process powershell -ArgumentList '-NoExit', '-Command', "Write-Host 'Taot-Worker  (parse/index)' -ForegroundColor Cyan; $workerCmd"
+    Start-Process powershell -ArgumentList '-NoExit', '-Command', "Write-Host 'Taot-Beat  (每日推荐)' -ForegroundColor Cyan; $beatCmd"
+    Start-Process powershell -ArgumentList '-NoExit', '-Command', "Write-Host 'Taot-Frontend  http://127.0.0.1:5173' -ForegroundColor Cyan; $frontCmd"
 } catch {
-    Write-Host "[WARNING] Backend service start exception: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "[WARNING] 子窗口启动异常: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
-Write-Host 'Starting frontend server (http://127.0.0.1:5173)...' -ForegroundColor White
-Write-Host "        Working directory: $frontendPath" -ForegroundColor Gray
-try {
-    $frontendProcess = Start-Process powershell `
-        -ArgumentList '-NoExit', '-Command', "Write-Host 'Taot-Frontend - Frontend Service' -ForegroundColor Cyan; npm run dev" `
-        -WorkingDirectory $frontendPath `
-        -WindowStyle Normal `
-        -PassThru
-    Write-Host "        Frontend process started (PID: $($frontendProcess.Id))" -ForegroundColor Green
-} catch {
-    Write-Host "[WARNING] Frontend service start exception: $($_.Exception.Message)" -ForegroundColor Yellow
-}
-
-Write-Host ''
 Write-Host '============================================' -ForegroundColor Cyan
-Write-Host '  Start complete!' -ForegroundColor Green
-Write-Host '  Backend:  http://127.0.0.1:8000' -ForegroundColor White
-Write-Host '  Frontend: http://127.0.0.1:5173' -ForegroundColor White
+Write-Host "  $Version 启动完成" -ForegroundColor Green
+Write-Host '  后端 API : http://127.0.0.1:8000/api/v1' -ForegroundColor White
+Write-Host '  前端     : http://127.0.0.1:5173' -ForegroundColor White
+Write-Host '  接口文档 : http://127.0.0.1:8000/docs（仅本机）' -ForegroundColor White
 Write-Host '============================================' -ForegroundColor Cyan
 Write-Host ''
-Write-Host 'Press Enter to close this window (backend and frontend will keep running)...' -ForegroundColor Yellow
+Write-Host '提示：AI 问答/个性化推荐需配置 EMBEDDING_MODEL 与 LLM_API_KEY，'
+Write-Host '      并先执行 uv sync --extra ai（本地 Embedding 模型体积较大）。'
+Write-Host '按 Enter 关闭本窗口（各服务窗口将保持运行）...' -ForegroundColor Yellow
 Read-Host
