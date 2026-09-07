@@ -1,132 +1,153 @@
-"""静态文件管理 - 上传、存储、提供访问"""
+"""文件路由：上传（存储 + 元数据 + 异步解析触发）与内容访问
+
+- purpose=document：异步解析为笔记（parse_document 任务）
+- purpose=asset：仅存储供内容引用（图片/代码等）
+"""
 import os
-import uuid
-import shutil
-from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import Response
 
+from app.core.config import settings
 from app.core.deps import get_current_user
-from app.models.user import User
+from app.core.permissions import PermissionChecker, get_permission_checker
+from app.models.file import FileMetadata, FilePurpose, FileRead, FileStatus
+from app.models.org import OrgRole
+from app.models.project import Project
+from app.services.parser import get_file_type
+from app.services.storage import get_storage
+from app.tasks.parse import parse_document
 
-router = APIRouter(prefix="/files", tags=["文件管理"])
+router = APIRouter(prefix="/files", tags=["文件"])
 
-# 统一静态文件存储根目录
-UPLOAD_ROOT = Path("static/uploads")
-
-# 允许的静态文件扩展名
-ALLOWED_EXTENSIONS = {
-    # 图片
-    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico',
-    # 字体
-    '.woff', '.woff2', '.ttf', '.eot', '.otf',
-    # 样式/脚本
-    '.css', '.js',
-    # 文档
-    '.pdf', '.md', '.txt',
-}
+_ALLOWED = set(settings.allowed_doc_extensions)
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
 
 
-def _get_user_dir(user_id: int) -> Path:
-    """获取用户上传目录"""
-    d = UPLOAD_ROOT / str(user_id)
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def _check_ext(filename: str) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in _ALLOWED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不支持的扩展名: {ext or '(无)'}",
+        )
+    return ext
 
 
-def _safe_filename(original: str) -> str:
-    """生成安全的唯一文件名，保留扩展名"""
-    ext = os.path.splitext(original)[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        ext = '.bin'
-    return f"{uuid.uuid4().hex}{ext}"
-
-
-@router.post("/upload", summary="上传单个静态文件")
+@router.post("/upload", response_model=FileRead, summary="上传文件（文档/附件）")
 async def upload_file(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    project_id: str = Form(...),
+    purpose: str = Form(FilePurpose.DOCUMENT.value),
+    perm: PermissionChecker = Depends(get_permission_checker),
 ):
-    """上传静态文件，返回可访问的 URL 路径"""
-    user_dir = _get_user_dir(current_user.id)
-    safe_name = _safe_filename(file.filename or "unknown")
-    dest = user_dir / safe_name
+    """上传到 StorageProvider → 记录 file_metadata →（文档）触发异步解析"""
+    if purpose not in (FilePurpose.DOCUMENT.value, FilePurpose.ASSET.value):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="purpose 需为 document 或 asset")
 
+    project, _ = await perm.require_project_role(project_id, OrgRole.MAINTAINER.value)
+    filename = file.filename or "unknown"
+    ext = _check_ext(filename)
     content = await file.read()
-    dest.write_bytes(content)
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件内容为空")
+    max_bytes = settings.parse_max_file_size_mb * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"文件超过大小限制 {settings.parse_max_file_size_mb}MB",
+        )
 
-    url = f"/static/uploads/{current_user.id}/{safe_name}"
-    return {
-        "url": url,
-        "filename": file.filename,
-        "size": len(content),
-    }
+    file_meta = FileMetadata(
+        organization_id=project.organization_id,
+        project_id=project.id,
+        owner_id=perm.user.id,
+        original_name=filename,
+        storage_key="",  # 占位，落盘后回填
+        size=len(content),
+        purpose=purpose,
+        status=FileStatus.PENDING.value,
+    )
+    perm.session.add(file_meta)
+    await perm.session.flush()
+
+    storage = get_storage()
+    key = storage.build_key(project.organization_id, file_meta.id, ext)
+    await storage.put(key, content)
+    file_meta.storage_key = key
+    file_meta.mime_type = file.content_type or "application/octet-stream"
+
+    if purpose == FilePurpose.ASSET.value:
+        file_meta.status = FileStatus.COMPLETED.value
+        file_meta.parser_type = "asset"
+    else:
+        file_meta.parser_type = get_file_type(filename)
+        file_meta.status = FileStatus.PENDING.value
+
+    await perm.session.commit()
+    await perm.session.refresh(file_meta)
+
+    if purpose == FilePurpose.DOCUMENT.value:
+        try:
+            # 优先入队（异步解析）；队列不可用时同步降级（同一事件循环内执行）
+            parse_document.delay(file_meta.id)
+        except Exception:  # noqa: BLE001
+            from app.tasks.parse import parse_file_now
+
+            await parse_file_now(file_meta.id, perm.session)
+
+    return FileRead.model_validate(file_meta)
 
 
-@router.post("/upload-batch", summary="批量上传静态文件")
-async def upload_files_batch(
-    files: list[UploadFile] = File(...),
-    current_user: User = Depends(get_current_user),
+@router.get("/{file_id}/content", summary="访问文件内容")
+async def file_content(
+    file_id: str,
+    perm: PermissionChecker = Depends(get_permission_checker),
 ):
-    """批量上传静态文件，保留相对目录结构"""
-    user_dir = _get_user_dir(current_user.id)
-    results: list[dict] = []
+    file_meta = await perm.session.get(FileMetadata, file_id)
+    if not file_meta:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在或无权访问")
+    await _ensure_file_accessible(file_meta, perm)
 
-    for file in files:
-        if not file.filename:
-            continue
-        safe_name = _safe_filename(os.path.basename(file.filename))
-        dest = user_dir / safe_name
-
-        content = await file.read()
-        dest.write_bytes(content)
-
-        results.append({
-            "original": file.filename,
-            "url": f"/static/uploads/{current_user.id}/{safe_name}",
-            "size": len(content),
-        })
-
-    return {"files": results, "count": len(results)}
+    try:
+        storage = get_storage()
+        data = await storage.get(file_meta.storage_key)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件实体缺失")
+    return Response(
+        content=data,
+        media_type=file_meta.mime_type or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{file_meta.original_name}"'},
+    )
 
 
-@router.post("/upload-with-path", summary="按目录结构批量上传")
-async def upload_with_path(
-    files: list[UploadFile] = File(...),
-    current_user: User = Depends(get_current_user),
+@router.get("/list/{project_id}", response_model=list[FileRead], summary="项目文件列表")
+async def list_files(
+    project_id: str,
+    perm: PermissionChecker = Depends(get_permission_checker),
 ):
-    """
-    保留原始相对路径的批量上传。
-    前端使用 webkitRelativePath 传入目录结构。
-    """
-    user_dir = _get_user_dir(current_user.id)
-    path_map: dict[str, str] = {}  # original_path -> url
+    await perm.require_project_role(project_id, OrgRole.REPORTER.value)
+    from sqlmodel import select
 
-    for file in files:
-        if not file.filename:
-            continue
-        # webkitRelativePath: "folder/sub/file.png"
-        relative_path = file.filename.replace("\\", "/")
-
-        # 保留目录结构
-        safe_name = f"{uuid.uuid4().hex[:8]}/{os.path.basename(relative_path)}"
-        dest = user_dir / safe_name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-
-        content = await file.read()
-        dest.write_bytes(content)
-
-        url = f"/static/uploads/{current_user.id}/{safe_name}"
-        path_map[relative_path] = url
-
-    return {"path_map": path_map, "count": len(path_map)}
+    result = await perm.session.execute(
+        select(FileMetadata).where(FileMetadata.project_id == project_id)
+        .order_by(FileMetadata.created_at.desc()).limit(100)
+    )
+    return [FileRead.model_validate(f) for f in result.scalars().all()]
 
 
-@router.get("/serve/{user_id}/{file_path:path}", summary="提供静态文件访问")
-async def serve_file(user_id: int, file_path: str):
-    """直接提供上传文件访问（用于 nginx 不可用时）"""
-    full_path = UPLOAD_ROOT / str(user_id) / file_path
-    if not full_path.exists():
-        raise HTTPException(status_code=404, detail="文件不存在")
-    return FileResponse(full_path)
+async def _ensure_file_accessible(file_meta: FileMetadata, perm: PermissionChecker) -> None:
+    """文件访问控制：owner 或 项目读角色"""
+    if file_meta.owner_id == perm.user.id:
+        return
+    if not file_meta.project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在或无权访问")
+    project = await perm.session.get(Project, file_meta.project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在或无权访问")
+    role = await perm.effective_project_role(project)
+    if not role:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在或无权访问")
+    if role not in ("owner", "admin", "maintainer", "reporter"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足")

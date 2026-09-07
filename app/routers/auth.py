@@ -1,9 +1,9 @@
-"""认证路由"""
+"""认证路由（注册时自动创建个人组织 + 默认项目）"""
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import Field, SQLModel, select
+from sqlmodel import SQLModel, select
 
 from app.core.deps import get_current_user
 from app.core.security import (
@@ -22,13 +22,22 @@ from app.models.user import (
     UserRegister,
     UserUpdate,
 )
+from app.services.bootstrap import create_personal_org
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
 
+async def _build_token(user: User) -> TokenResponse:
+    return TokenResponse(
+        access_token=create_access_token(user.id),
+        refresh_token=create_refresh_token(user.id),
+        user=UserRead.model_validate(user),
+    )
+
+
 @router.post("/register", response_model=TokenResponse, summary="用户注册")
 async def register(body: UserRegister, session: AsyncSession = Depends(get_session)):
-    """注册新用户并返回令牌"""
+    """注册新用户：创建账号 + 个人组织与默认项目"""
     existing = await session.execute(
         select(User).where((User.username == body.username) | (User.email == body.email))
     )
@@ -45,11 +54,10 @@ async def register(body: UserRegister, session: AsyncSession = Depends(get_sessi
     await session.commit()
     await session.refresh(user)
 
-    return TokenResponse(
-        access_token=create_access_token(user.id),
-        refresh_token=create_refresh_token(user.id),
-        user=UserRead.model_validate(user),
-    )
+    # 个人组织 + 默认项目（等价旧 Workspace）
+    await create_personal_org(session, user)
+
+    return await _build_token(user)
 
 
 @router.post("/login", response_model=TokenResponse, summary="用户登录")
@@ -61,20 +69,15 @@ async def login(body: UserLogin, session: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账户已禁用")
-
-    return TokenResponse(
-        access_token=create_access_token(user.id),
-        refresh_token=create_refresh_token(user.id),
-        user=UserRead.model_validate(user),
-    )
+    return await _build_token(user)
 
 
-class RefreshTokenBody(SQLModel):
+class RefreshTokenRequest(SQLModel):
     refresh_token: str
 
 
 @router.post("/refresh", response_model=TokenResponse, summary="刷新令牌")
-async def refresh(body: RefreshTokenBody, session: AsyncSession = Depends(get_session)):
+async def refresh(body: RefreshTokenRequest, session: AsyncSession = Depends(get_session)):
     """使用 refresh token 换取新的 access token"""
     payload = decode_token(body.refresh_token)
     if not payload or payload.get("type") != "refresh":
@@ -84,12 +87,7 @@ async def refresh(body: RefreshTokenBody, session: AsyncSession = Depends(get_se
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
-
-    return TokenResponse(
-        access_token=create_access_token(user.id),
-        refresh_token=create_refresh_token(user.id),
-        user=UserRead.model_validate(user),
-    )
+    return await _build_token(user)
 
 
 @router.get("/me", response_model=UserRead, summary="获取当前用户")

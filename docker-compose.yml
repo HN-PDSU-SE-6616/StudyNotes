@@ -1,0 +1,138 @@
+name: taot-kb
+
+services:
+  # ---------- 基础设施 ----------
+  postgres:
+    image: postgres:16-alpine
+    container_name: taot-postgres
+    environment:
+      - POSTGRES_USER=taot
+      - POSTGRES_PASSWORD=taot
+      - POSTGRES_DB=taot
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taot -d taot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.0
+    container_name: taot-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: taot-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------- 应用 ----------
+  # FastAPI 后端（含迁移执行入口），依赖 postgres/qdrant/redis
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: taot-backend
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://taot:taot@postgres:5432/taot
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - ALGORITHM=HS256
+      - ACCESS_TOKEN_EXPIRE_MINUTES=1440
+      - REFRESH_TOKEN_EXPIRE_DAYS=7
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
+      - STORAGE_ROOT=/app/storage
+    volumes:
+      - ./storage:/app/storage
+      - ./static:/app/static
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Celery Worker：文件解析 + 向量索引
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: taot-worker
+    command: celery -A app.worker.celery_app worker -Q parse,index -l info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://taot:taot@postgres:5432/taot
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
+      - STORAGE_ROOT=/app/storage
+    volumes:
+      - ./storage:/app/storage
+      - ./static:/app/static
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Celery Beat：推荐等定时任务
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: taot-beat
+    command: celery -A app.worker.celery_app beat -l info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://taot:taot@postgres:5432/taot
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
+      - STORAGE_ROOT=/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  qdrant_data:
+  redis_data:

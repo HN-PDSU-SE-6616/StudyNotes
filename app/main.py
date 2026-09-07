@@ -1,5 +1,6 @@
 # app/main.py
 from contextlib import asynccontextmanager
+import logging
 import os
 
 from fastapi import FastAPI, Request
@@ -9,19 +10,43 @@ from fastapi.responses import FileResponse, Response
 
 from app.core.config import settings
 from app.database import init_db
-from app.routers import notes, convert, auth, pages, blocks, hotspots, files
+from app.routers import (
+    auth,
+    orgs,
+    projects,
+    notes,
+    blocks,
+    files,
+    rag,
+    recommendations,
+    hotspots,
+    convert,
+)
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
+    try:
+        await init_db()
+    except Exception:  # noqa: BLE001
+        logger.exception("数据库初始化失败（请确认 PostgreSQL 已启动并执行过迁移）")
+        raise
+    # 启动期确保 Qdrant collection 存在（不依赖 AI 模型时的默认维度）
+    try:
+        from app.services import qdrant_service
+
+        qdrant_service.ensure_collections(vector_size=1024)
+    except Exception:  # noqa: BLE001
+        logger.warning("Qdrant 不可用，向量检索功能暂不可用")
     yield
 
 
 app = FastAPI(
     title=settings.app_name,
-    description="知识库：笔记管理 + 热点聚合",
-    version="2.0.0",
+    description="知识库：多组织笔记 + 文件流水线 + 向量问答 + 推荐",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -34,25 +59,23 @@ app.add_middleware(
 
 PREFIX = settings.api_prefix
 
-# Auto-create directories that git doesn't track (for fresh clones)
-for _dir in ("uploads", "static"):
-    os.makedirs(_dir, exist_ok=True)
-
-# Mount static file directories
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+# 静态资源（头像/旧资产等；文件实体统一走 /api/v1/files）
+os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Legacy note_assets mount - only if data directory exists (for Wolai HTML export compatibility)
-if os.path.isdir(settings.notes_data_path):
-    app.mount("/note_assets", StaticFiles(directory=settings.notes_data_path), name="note_assets")
-
+# ========== 新版本化 API ==========
 app.include_router(auth.router, prefix=PREFIX)
-app.include_router(pages.router, prefix=PREFIX)
+app.include_router(orgs.router, prefix=PREFIX)
+app.include_router(projects.collection, prefix=PREFIX)
+app.include_router(projects.items, prefix=PREFIX)
+app.include_router(notes.collection, prefix=PREFIX)
+app.include_router(notes.items, prefix=PREFIX)
 app.include_router(blocks.router, prefix=PREFIX)
-app.include_router(hotspots.router, prefix=PREFIX)
-app.include_router(notes.router, prefix=PREFIX)
-app.include_router(convert.router, prefix=PREFIX)
 app.include_router(files.router, prefix=PREFIX)
+app.include_router(rag.router, prefix=PREFIX)
+app.include_router(recommendations.router, prefix=PREFIX)
+app.include_router(hotspots.router, prefix=PREFIX)
+app.include_router(convert.router, prefix=PREFIX)
 
 
 # ========== /docs 保护：仅允许 localhost 访问 ==========
@@ -81,6 +104,12 @@ if os.path.isdir(FRONTEND_DIST):
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         """所有非 API/静态文件路径返回前端 index.html（SPA 模式）"""
+        # API 未命中一律 JSON 404，避免返回 HTML 干扰前端错误处理
+        prefix = PREFIX.strip("/")
+        if full_path.startswith(prefix + "/") or full_path in (prefix,):
+            return Response(status_code=404, content='{"detail":"Not Found"}', media_type="application/json")
+        if full_path.startswith("static/"):
+            return Response(status_code=404)
         index_path = os.path.join(FRONTEND_DIST, "index.html")
         if os.path.isfile(index_path):
             return FileResponse(index_path)

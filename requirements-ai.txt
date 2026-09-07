@@ -1,0 +1,7 @@
+# 可选 AI 依赖：本地 Embedding（BGE-M3）+ 向量计算。
+# 首次安装体积较大（含 PyTorch CPU 版）。RAG/推荐功能需要先安装本文件：
+#   pip install -r requirements-ai.txt
+# 或使用 CPU 专用索引加速（Windows 见 https://pytorch.org 说明）。
+torch>=2.5.1
+sentence-transformers>=3.3.1
+numpy>=1.26.0

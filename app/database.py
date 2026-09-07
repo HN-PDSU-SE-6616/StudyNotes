@@ -1,69 +1,61 @@
 # app/database.py
+"""数据库引擎与会话（PostgreSQL asyncpg；兼容 SQLite 用于测试）"""
+import logging
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
 
-engine = create_async_engine(settings.database_url, echo=False)
+logger = logging.getLogger(__name__)
 
-async_session = sessionmaker(
-    engine, class_=AsyncSession, expire_on_commit=False
-)
+engine = create_async_engine(settings.database_url, echo=False, pool_pre_ping=True)
+
+async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
-async def init_db():
-    # 确保所有表模型被注册
+def _ensure_storage_dirs() -> None:
+    """确保 git 不追踪的目录存在（上传/静态/对象存储根）"""
+    for _dir in (settings.storage_root, "static", "uploads"):
+        os.makedirs(_dir, exist_ok=True)
+
+
+def run_migrations() -> None:
+    """以子进程执行 alembic upgrade head（保证工作目录正确加载 .env）"""
+    project_root = Path(__file__).resolve().parent.parent
+    ini = project_root / "alembic.ini"
+    if not ini.exists():
+        raise FileNotFoundError("缺少 alembic.ini，请先完成 Alembic 初始化")
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"数据库迁移失败:\n{result.stdout}\n{result.stderr}")
+    logger.info("Alembic 迁移完成")
+
+
+async def init_db() -> None:
+    """应用启动初始化：
+    1) 优先执行 Alembic 迁移；
+    2) 若 alembic 不可用（例如仅测试环境），退回 create_all 兜底。
+    """
+    _ensure_storage_dirs()
+    try:
+        run_migrations()
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Alembic 迁移不可用，退回 create_all：%s", exc)
+
     import app.models  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    # 为已有页面补充 slug（新增列兼容）
-    await _backfill_slugs()
-    # 页面统计相关列
-    await _backfill_page_stats_columns()
-
-
-async def _backfill_slugs():
-    """为没有 slug 的已有页面生成唯一标识符"""
-    import secrets
-    async with async_session() as session:
-        try:
-            # 尝试添加列（如果已存在则忽略）
-            await session.execute(text("ALTER TABLE page ADD COLUMN slug VARCHAR(16)"))
-            await session.commit()
-        except Exception:
-            await session.rollback()
-        # 填充空 slug
-        result = await session.execute(text("SELECT id FROM page WHERE slug IS NULL OR slug = ''"))
-        rows = result.fetchall()
-        for (pid,) in rows:
-            new_slug = secrets.token_urlsafe(12)[:16]
-            await session.execute(text("UPDATE page SET slug = :s WHERE id = :i"), {"s": new_slug, "i": pid})
-        if rows:
-            await session.commit()
-        # 创建唯一索引
-        try:
-            await session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_page_slug ON page(slug)"))
-            await session.commit()
-        except Exception:
-            await session.rollback()
-
-
-async def _backfill_page_stats_columns():
-    """添加页面统计相关列（creator_id, last_editor_id, view_count）"""
-    columns = [
-        "ALTER TABLE page ADD COLUMN creator_id INTEGER REFERENCES user(id)",
-        "ALTER TABLE page ADD COLUMN last_editor_id INTEGER REFERENCES user(id)",
-        "ALTER TABLE page ADD COLUMN view_count INTEGER DEFAULT 0",
-    ]
-    async with async_session() as session:
-        for sql in columns:
-            try:
-                await session.execute(text(sql))
-                await session.commit()
-            except Exception:
-                await session.rollback()
 
 
 async def get_session() -> AsyncSession:

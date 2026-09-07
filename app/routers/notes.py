@@ -1,131 +1,341 @@
-# app/routers/notes.py
-import json
-import os
-from typing import List, Optional, Sequence
+"""笔记路由：项目内笔记树 / 笔记 CRUD / 统计 / 链接 / ACL
 
-import aiofiles
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select, func
-from starlette.responses import HTMLResponse
-
-from app.database import get_session
-from app.models import Note, NoteCreate, NoteRead, NoteUpdate
+注意：文件导入的笔记由文件流水线生成；编辑器内容块操作见 blocks.py。
+"""
 from datetime import datetime
+from typing import Optional
 
-from app.utils.markdown import fix_html_assets
-from app.core.config import settings
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import SQLModel, select
 
-NOTES_ROOT = os.path.abspath(settings.notes_data_path)
+from app.core.deps import get_current_user
+from app.core.permissions import PermissionChecker, get_permission_checker
+from app.database import get_session
+from app.models.note import (
+    Note,
+    NoteAcl,
+    NoteBlock,
+    NoteBlockRead,
+    NoteCreate,
+    NoteDetail,
+    NoteLink,
+    NoteRead,
+    NoteStats,
+    NoteTreeNode,
+    NoteUpdate,
+    NoteViewLog,
+)
+from app.models.org import OrgRole
+from app.models.project import Project, ProjectMember, PROJECT_ADMIN_ROLES
+from app.models.user import User
+from app.services.note_service import (
+    build_note_graph,
+    build_note_tree,
+    compute_note_stats,
+    get_note_blocks,
+    get_project_notes,
+    sync_note_link_blocks_order,
+)
+from app.tasks.index import queue_delete_note_index, queue_index_note
 
-router = APIRouter(prefix="/notes", tags=["笔记管理"])
+collection = APIRouter(prefix="/projects/{project_id}/notes", tags=["笔记"])
+items = APIRouter(prefix="/notes", tags=["笔记"])
 
 
-def build_tree(nodes: List[Note], parent_id=None):
-    """递归构建树结构"""
-    tree = []
-    for node in nodes:
-        if node.parent_id == parent_id:
-            node_dict = node.dict()
-            node_dict["children"] = build_tree(nodes, node.id)
-            tree.append(node_dict)
-    return tree
+def _gen_note_dict(note: Note) -> NoteRead:
+    return NoteRead.model_validate(note)
 
 
-##################################################
-#                 静态路由                        #
-##################################################
-@router.post("/", response_model=NoteRead, summary="创建笔记")
-async def create_note(note: NoteCreate, session: AsyncSession = Depends(get_session)):
-    db_note = Note.from_orm(note)
-    session.add(db_note)
-    await session.commit()
-    await session.refresh(db_note)
-    return db_note
+# ========== 项目内笔记集合 ==========
 
-
-@router.get("/", response_model=List[NoteRead], summary="获取笔记列表")
+@collection.get("/", response_model=list[NoteTreeNode], summary="项目笔记树")
 async def list_notes(
-        skip: int = Query(0, description="跳过条数"),
-        limit: int = Query(10, description="每页条数"),
-        session: AsyncSession = Depends(get_session),
+    project_id: str,
+    perm: PermissionChecker = Depends(get_permission_checker),
 ):
-    query = select(Note)
-    query = query.offset(skip).limit(limit).order_by(Note.created_at.desc())
-    result = await session.execute(query)
-    return result.scalars().all()
+    await perm.require_project_role(project_id, OrgRole.REPORTER.value)
+    notes = await get_project_notes(perm.session, project_id)
+    note_ids = [n.id for n in notes]
+    links = []
+    if note_ids:
+        result = await perm.session.execute(
+            select(NoteLink).where(NoteLink.source_note_id.in_(note_ids))
+        )
+        links = list(result.scalars().all())
+    return build_note_tree(notes, links)
 
 
-@router.get("/tree", summary="获取笔记树列表")
-async def get_notes_tree(session: AsyncSession = Depends(get_session)):
-    """获取整站笔记目录树接口"""
-    query = select(Note)
-    results = await session.execute(query)
-    all_notes = results.scalars().all()
+@collection.get("/graph", summary="项目关系图")
+async def note_graph(
+    project_id: str,
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    await perm.require_project_role(project_id, OrgRole.REPORTER.value)
+    return await build_note_graph(perm.session, project_id)
 
-    return build_tree(all_notes, parent_id=None)
+
+@collection.get("/search", response_model=list[NoteRead], summary="搜索项目内笔记")
+async def search_notes(
+    project_id: str,
+    q: str = Query(..., min_length=1),
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    await perm.require_project_role(project_id, OrgRole.REPORTER.value)
+    result = await perm.session.execute(
+        select(Note).where(Note.project_id == project_id, Note.title.contains(q))
+    )
+    return [_gen_note_dict(p) for p in result.scalars().all()]
 
 
-##################################################
-#                 动态路由                        #
-##################################################
-@router.get("/{note_id}", response_model=NoteRead, summary="获取单篇笔记")
-async def get_note(note_id: int, session: AsyncSession = Depends(get_session)):
-    note = await session.get(Note, note_id)
+@collection.post("/", response_model=NoteRead, summary="创建笔记")
+async def create_note(
+    project_id: str,
+    body: NoteCreate,
+    current_user: User = Depends(get_current_user),
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    project, _ = await perm.require_project_role(project_id, OrgRole.MAINTAINER.value)
+    note = Note(
+        project_id=project.id,
+        title=body.title,
+        icon=body.icon,
+        parent_id=body.parent_id,
+        sort_order=body.sort_order,
+        owner_id=current_user.id,
+        creator_id=current_user.id,
+        last_editor_id=current_user.id,
+    )
+    perm.session.add(note)
+    await perm.session.commit()
+    await perm.session.refresh(note)
+    # 占位段落（与旧编辑器行为一致）
+    perm.session.add(NoteBlock(
+        note_id=note.id,
+        type="paragraph",
+        content={"text": ""},
+        sort_order=0,
+    ))
+    await perm.session.commit()
+    return _gen_note_dict(note)
+
+
+@collection.get("/by-slug/{slug}", response_model=NoteDetail, summary="按 slug 获取笔记")
+async def get_note_by_slug(
+    project_id: str,
+    slug: str,
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    result = await perm.session.execute(
+        select(Note).where(Note.project_id == project_id, Note.slug == slug)
+    )
+    note = result.scalar_one_or_none()
     if not note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
-    return note
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="笔记不存在或无权访问")
+    await perm.require_note(note.id, "read")
+    return await _detail(perm.session, note)
 
 
-@router.get("/{note_id}/detail", response_class=HTMLResponse, summary="获取笔记详情页")
-async def get_note_detail(note_id: int, session: AsyncSession = Depends(get_session)):
-    note = await session.get(Note, note_id)
-    if not note or note.content_type != "file":
-        raise HTTPException(status_code=404, detail="笔记不存在或无HTML内容")
+# ========== 笔记条目 ==========
 
-    # 实际的 HTML 文件路径
-    base_path = os.path.join(NOTES_ROOT, note.content_path)
-
-    # 目录下 HTML 文件
-    html_files = [f for f in os.listdir(base_path) if f.endswith(".html")]
-    if not html_files:
-        raise HTTPException(status_code=404, detail="未找到HTML文件")
-
-    file_path = os.path.join(base_path, html_files[0])
-
-    async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
-        content = await f.read()
-
-    fixed_content = fix_html_assets(content, note.content_path)
-
-    return HTMLResponse(content=fixed_content)
+async def _detail(session: AsyncSession, note: Note) -> NoteDetail:
+    blocks = await get_note_blocks(session, note.id)
+    return NoteDetail(
+        **NoteRead.model_validate(note).model_dump(),
+        blocks=[NoteBlockRead.model_validate(b) for b in blocks],
+    )
 
 
-@router.patch("/{note_id}", response_model=NoteRead, summary="更新笔记")
+@items.get("/{note_id}", response_model=NoteDetail, summary="笔记详情")
+async def get_note_detail(
+    note_id: str,
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    note, _ = await perm.require_note(note_id, "read")
+    return await _detail(perm.session, note)
+
+
+@items.patch("/{note_id}", response_model=NoteRead, summary="更新笔记元信息")
 async def update_note(
-        note_id: int, note_update: NoteUpdate, session: AsyncSession = Depends(get_session)
+    note_id: str,
+    body: NoteUpdate,
+    current_user: User = Depends(get_current_user),
+    perm: PermissionChecker = Depends(get_permission_checker),
 ):
-    note = await session.get(Note, note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
-
-    update_data = note_update.dict(exclude_unset=True)
-    update_data["updated_at"] = datetime.utcnow()
-    for key, value in update_data.items():
+    note, _ = await perm.require_note(note_id, "write")
+    for key, value in body.model_dump(exclude_unset=True).items():
         setattr(note, key, value)
+    note.updated_at = datetime.utcnow()
+    note.last_editor_id = current_user.id
+    perm.session.add(note)
+    await perm.session.commit()
+    await perm.session.refresh(note)
 
-    session.add(note)
-    await session.commit()
-    await session.refresh(note)
-    return note
+    if "sort_order" in body.model_dump(exclude_unset=True) or "parent_id" in body.model_dump(exclude_unset=True):
+        await sync_note_link_blocks_order(perm.session, note.id)
+    # 公开属性变化影响向量过滤条件 → 触发重建
+    if "is_public" in body.model_dump(exclude_unset=True):
+        queue_index_note(note.id)
+    return _gen_note_dict(note)
 
 
-@router.delete("/{note_id}", summary="删除笔记")
-async def delete_note(note_id: int, session: AsyncSession = Depends(get_session)):
-    note = await session.get(Note, note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="笔记不存在")
-    await session.delete(note)
-    await session.commit()
-    return {"message": f"笔记 {note_id} 已删除"}
+@items.delete("/{note_id}", summary="删除笔记")
+async def delete_note(
+    note_id: str,
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    note, _ = await perm.require_note(note_id, "delete")
+    blocks = await get_note_blocks(perm.session, note.id)
+    for b in blocks:
+        await perm.session.delete(b)
 
+    links = (await perm.session.execute(
+        select(NoteLink).where(
+            (NoteLink.source_note_id == note_id) | (NoteLink.target_note_id == note_id)
+        )
+    )).scalars().all()
+    for link in links:
+        await perm.session.delete(link)
+
+    acls = (await perm.session.execute(
+        select(NoteAcl).where(NoteAcl.note_id == note_id)
+    )).scalars().all()
+    for a in acls:
+        await perm.session.delete(a)
+    view_logs = (await perm.session.execute(
+        select(NoteViewLog).where(NoteViewLog.note_id == note_id)
+    )).scalars().all()
+    for v in view_logs:
+        await perm.session.delete(v)
+
+    await perm.session.delete(note)
+    await perm.session.commit()
+    queue_delete_note_index(note_id)
+    # 同步引用该笔记的 note_link 块
+    await sync_note_link_blocks_order(perm.session, note_id)
+    return {"message": "笔记已删除"}
+
+
+@items.post("/{note_id}/duplicate", response_model=NoteRead, summary="复制笔记")
+async def duplicate_note(
+    note_id: str,
+    current_user: User = Depends(get_current_user),
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    note, _ = await perm.require_note(note_id, "write")
+    blocks = await get_note_blocks(perm.session, note.id)
+
+    new_note = Note(
+        project_id=note.project_id,
+        title=f"{note.title} (副本)",
+        icon=note.icon,
+        parent_id=note.parent_id,
+        sort_order=note.sort_order + 1,
+        owner_id=current_user.id,
+        creator_id=current_user.id,
+        last_editor_id=current_user.id,
+    )
+    perm.session.add(new_note)
+    await perm.session.flush()
+
+    for block in blocks:
+        import copy
+
+        perm.session.add(NoteBlock(
+            note_id=new_note.id,
+            type=block.type,
+            content=copy.deepcopy(block.content),
+            sort_order=block.sort_order,
+        ))
+    await perm.session.commit()
+    await perm.session.refresh(new_note)
+    queue_index_note(new_note.id)
+    return _gen_note_dict(new_note)
+
+
+@items.get("/{note_id}/stats", response_model=NoteStats, summary="笔记统计（同时记录浏览）")
+async def get_note_stats(
+    note_id: str,
+    current_user: User = Depends(get_current_user),
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    note, _ = await perm.require_note(note_id, "read")
+    note.view_count = (note.view_count or 0) + 1
+    perm.session.add(note)
+    # 浏览记录（推荐引擎输入）
+    perm.session.add(NoteViewLog(user_id=current_user.id, note_id=note.id))
+    await perm.session.commit()
+    await perm.session.refresh(note)
+
+    blocks = await get_note_blocks(perm.session, note.id)
+    stats = await compute_note_stats(perm.session, note, blocks)
+    return stats
+
+
+@items.post("/{note_id}/sync-link-blocks", summary="同步引用本笔记的链接块")
+async def sync_link_blocks(
+    note_id: str,
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    await perm.require_note(note_id, "write")
+    await sync_note_link_blocks_order(perm.session, note_id)
+    return {"message": "同步完成", "note_id": note_id}
+
+
+# ---------- ABAC ACL ----------
+
+class AclGrantRequest(SQLModel):
+    username: str
+    permission: str = "read"  # read / write / delete
+
+
+@items.post("/{note_id}/acl", summary="授予用户笔记级权限")
+async def grant_acl(
+    note_id: str,
+    body: AclGrantRequest,
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    note, role = await perm.require_note(note_id, "delete")
+    # 只有 owner 或项目 Owner/Admin 可管理 ACL
+    if note.owner_id != perm.user.id and (not role or role not in PROJECT_ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足")
+    if body.permission not in ("read", "write", "delete"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="permission 需为 read/write/delete")
+
+    target_result = await perm.session.execute(select(User).where(User.username == body.username))
+    target = target_result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    existing = await perm.session.execute(
+        select(NoteAcl).where(NoteAcl.note_id == note_id, NoteAcl.user_id == target.id)
+    )
+    acl = existing.scalar_one_or_none()
+    if acl:
+        acl.permission = body.permission
+        perm.session.add(acl)
+    else:
+        acl = NoteAcl(note_id=note_id, user_id=target.id, permission=body.permission)
+        perm.session.add(acl)
+    await perm.session.commit()
+    return {"message": "授权成功", "user_id": target.id, "permission": acl.permission}
+
+
+@items.delete("/{note_id}/acl/{user_id}", summary="撤销笔记级权限")
+async def revoke_acl(
+    note_id: str,
+    user_id: int,
+    perm: PermissionChecker = Depends(get_permission_checker),
+):
+    note, role = await perm.require_note(note_id, "delete")
+    if note.owner_id != perm.user.id and (not role or role not in PROJECT_ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足")
+    existing = await perm.session.execute(
+        select(NoteAcl).where(NoteAcl.note_id == note_id, NoteAcl.user_id == user_id)
+    )
+    acl = existing.scalar_one_or_none()
+    if not acl:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="授权记录不存在")
+    await perm.session.delete(acl)
+    await perm.session.commit()
+    return {"message": "已撤销授权"}

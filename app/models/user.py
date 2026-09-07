@@ -1,4 +1,4 @@
-"""用户相关模型"""
+"""用户模型（沿用原认证结构，表保持不变）"""
 from datetime import datetime
 from typing import Optional
 
@@ -13,6 +13,8 @@ class UserBase(SQLModel):
 
 
 class User(UserBase, table=True):
+    __tablename__ = "user"
+
     id: Optional[int] = Field(default=None, primary_key=True)
     hashed_password: str
     is_active: bool = Field(default=True)
