@@ -11,6 +11,7 @@ export interface ChatOverrides {
   temperature?: number
   tools?: boolean
   client_context?: Record<string, string> | null
+  project_id?: string | null
 }
 
 export const assistantApi = {
@@ -25,6 +26,7 @@ export const assistantApi = {
         temperature: overrides.temperature ?? 0.7,
         tools: overrides.tools ?? true,
         client_context: overrides.client_context || null,
+        project_id: overrides.project_id || null,
       },
     ),
   /** 清空指定会话的服务端上下文（session_id） */
@@ -52,6 +54,7 @@ export async function streamAssistantChat(
       temperature: overrides.temperature ?? 0.7,
       tools: overrides.tools ?? true,
       client_context: overrides.client_context || null,
+      project_id: overrides.project_id || null,
     }),
   })
   if (!resp.ok || !resp.body) {

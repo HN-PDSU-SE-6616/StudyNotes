@@ -144,10 +144,12 @@ EMBEDDING_DIM=1024                                      # 建议显式配置，�
 - 对话方式：自由对话（Agent，`POST /api/v1/assistant/chat` 与 `/chat/stream` SSE）
   或知识库问答（RAG）；模型/密钥由后端 `.env`（`LLM_MODEL/LLM_API_KEY`）统一管理；
 - **工具函数（可扩展）**：注册表 `app/services/tools.py`，对话自动 function calling：
-  `get_weather`（open-meteo 实时天气）· `get_ip`（公网/内网 IP）·
-  `get_system_info`（服务端 + 浏览器客户端 CPU/GPU/内存，客户端参数由前端采集注入）·
-  `fetch_web_page`（httpx + BeautifulSoup4 提取网页正文）· `web_search`（DuckDuckGo）；
-  模型不支持 tools 时自动降级为普通对话；
+  `search_knowledge_base`（RAG 检索当前/可访问项目的笔记片段，供自由对话直接回答
+  “我的笔记/知识库内容”类问题）· `get_weather`（open-meteo 实时天气）·
+  `get_ip`（公网/内网 IP）· `get_system_info`（服务端 + 浏览器客户端 CPU/GPU/内存，
+  客户端参数由前端采集注入）· `fetch_web_page`（httpx + BeautifulSoup4 提取网页正文）·
+  `web_search`（DuckDuckGo）；
+  模型不支持 tools 时自动降级为普通对话；知识库工具走后端 RBAC（仅检索用户可访问项目）；
 - **会话上下文**：`session_id` 记忆最近对话（Redis，每用户隔离），`POST /assistant/context/clear` 清空；
 - **相似问题热缓存**：同一用户重复/近似问题（归一化 + 字符 bigram/LCS 相似 ≥ 阈值）
   直接复用回答，减少重复调用模型（流式同样命中并回放）；

@@ -299,3 +299,48 @@ def execute_tool(name: str, arguments: dict, ctx: Optional[dict] = None) -> str:
     except Exception as exc:  # noqa: BLE001
         logger.warning("工具 %s 执行失败: %s", name, exc, exc_info=True)
         return f"工具 {name} 执行出错：{type(exc).__name__}: {exc}"
+
+
+# ---------- 6. 知识库 RAG 检索 ----------
+@register_tool(
+    "search_knowledge_base",
+    "在用户的知识库（笔记）中做向量检索并返回相关内容片段。"
+    "当问题涉及‘我的笔记/知识库/我学过的…/项目里的内容’等当前知识库内容时，"
+    "必须先调用本工具检索到原文后再基于检索结果回答；不要凭空作答。",
+    {"type": "object",
+     "properties": {
+         "question": {"type": "string", "description": "要检索的问题/关键词"},
+         "project_id": {"type": "string", "description": "限定单个项目（可选，留空检索全部可访问项目）"},
+         "top_k": {"type": "integer", "description": "返回片段数，默认 3，最大 8"}},
+     "required": ["question"]},
+)
+def _kb_search(ctx: dict, question: str = "", project_id: str = "", top_k: int = 3) -> str:
+    """知识库检索：工具上下文需由路由注入 kb（可访问项目 + 当前项目）"""
+    question = (question or "").strip()
+    if not question:
+        return "缺少参数 question（检索关键词），请让用户明确后再试。"
+    kb = ctx.get("kb") or {}
+    ids = kb.get("accessible_project_ids") or []
+    if not kb.get("enabled") or not ids:
+        return "知识库检索暂不可用：当前未登录，或没有任何可访问的知识库项目。"
+    pid = (project_id or "").strip() or kb.get("project_id") or None
+    if pid and pid not in ids:
+        return "你无权访问该项目的内容，无法检索。"
+    scope: list = ids if not pid else [pid]
+    try:
+        from app.services import rag as rag_svc
+        res = rag_svc.search_only(question, scope, top_k=min(max(int(top_k or 3), 1), 8))
+    except RuntimeError as exc:
+        return f"知识库检索不可用：{exc}"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("search_knowledge_base 失败: %s", exc, exc_info=True)
+        return f"知识库检索失败：{type(exc).__name__}: {exc}"
+    if not res.get("found"):
+        return "知识库中未找到与问题相关的内容，可如实告知用户知识库内没有该资料。"
+    parts = [f"知识库检索命中 {len(res['sources'])} 条（请基于以下原文回答并标注来源编号）："]
+    for s in res["sources"]:
+        head = f"【{s['title']}】"
+        if s.get("heading_path"):
+            head += f"（{s['heading_path']}）"
+        parts.append(f"{head}：{(s.get('content') or '')[:1200]}")
+    return "\n\n".join(parts)[:3800] + ("\n（内容较长已截断）" if len(parts) > 0 else "")

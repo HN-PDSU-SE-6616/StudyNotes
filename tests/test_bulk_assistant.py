@@ -78,19 +78,24 @@ def test_assistant_chat_proxy(client, register, monkeypatch):
     captured = {}
 
     def fake_agent(messages, base_url=None, api_key=None, model=None, temperature=0.7,
-                   tools_enabled=True, client_context=None):
+                   tools_enabled=True, client_context=None, rag_context=None):
         captured.update({"messages": messages, "temperature": temperature,
-                         "tools_enabled": tools_enabled})
+                         "tools_enabled": tools_enabled, "rag_context": rag_context})
         return "你好！我是测试助手。", "mock-model", False
 
     monkeypatch.setattr(agent_mod, "run_agent", fake_agent)
     r = client.post("/api/v1/assistant/chat", headers=headers, json={
         "messages": [{"role": "user", "content": "你好"}],
+        "project_id": "proj-x",
     })
     assert r.status_code == 200, r.text
     assert r.json()["reply"] == "你好！我是测试助手。"
     assert captured["tools_enabled"] is True
     assert captured["messages"][-1]["content"] == "你好"
+    # 登录用户注入知识库检索上下文（可访问项目 + 限定项目）
+    rc = captured["rag_context"]
+    assert rc and rc["enabled"] is True
+    assert rc["project_id"] == "proj-x"
 
     # LLM 侧异常 → 503 可读错误
     def boom(*_a, **_k):
@@ -217,7 +222,7 @@ def test_agent_tools_registry_and_handlers(monkeypatch):
 
     names = {t["function"]["name"] for t in tools.list_tools()}
     assert {"get_weather", "get_ip", "get_system_info",
-            "fetch_web_page", "web_search"} <= names
+            "fetch_web_page", "web_search", "search_knowledge_base"} <= names
 
     # get_system_info(scope=client) 读取注入的浏览器环境
     out = tools.execute_tool(
@@ -365,3 +370,54 @@ def test_import_dir_renames_target_page(client, register):
     assert detail["title"] == folder
     texts = [blk.get("content", {}).get("text", "") for blk in (detail.get("blocks") or [])]
     assert any("同名内容" in t for t in texts)
+
+
+def test_agent_kb_search_tool(monkeypatch):
+    """search_knowledge_base：权限门控 + 命中/未命中 + 检索失败提示"""
+    from app.services import rag as rag_svc
+    from app.services import tools
+
+    # 未登录/无项目上下文 → 明确提示不可用
+    out = tools.execute_tool("search_knowledge_base", {"question": "FastAPI 是什么"},
+                             {"kb": {"enabled": False}})
+    assert "知识库检索暂不可用" in out
+
+    # 指定无权项目 → 拒绝
+    out = tools.execute_tool("search_knowledge_base",
+                             {"question": "x", "project_id": "proj-other"},
+                             {"kb": {"enabled": True, "accessible_project_ids": ["p1"]}})
+    assert "无权访问" in out
+
+    def fake_search(question, accessible, top_k=8):
+        assert accessible == ["p1"]
+        return {"found": True, "sources": [{
+            "title": "FastAPI 笔记", "heading_path": "依赖注入",
+            "content": "FastAPI 依赖注入通过 Depends 声明参数。",
+        }]}
+
+    monkeypatch.setattr(rag_svc, "search_only", fake_search)
+    out = tools.execute_tool(
+        "search_knowledge_base", {"question": "FastAPI 依赖注入是什么？", "project_id": "p1"},
+        {"kb": {"enabled": True, "accessible_project_ids": ["p1", "p2"],
+                "project_id": "p1"}},
+    )
+    assert "命中 1 条" in out
+    assert "FastAPI 依赖注入通过 Depends" in out
+
+    # 未命中 → 引导如实说明
+    monkeypatch.setattr(rag_svc, "search_only",
+                        lambda *a, **k: {"found": False, "sources": [], "context": ""})
+    out = tools.execute_tool("search_knowledge_base", {"question": "远古冷门问题"},
+                             {"kb": {"enabled": True,
+                                     "accessible_project_ids": ["p1"], "project_id": "p1"}})
+    assert "未找到与问题相关的内容" in out
+
+    # 检索层失败 → 以文本返回（不抛出）
+    def boom(*a, **k):
+        raise RuntimeError("未配置 EMBEDDING_MODEL，知识库检索不可用")
+
+    monkeypatch.setattr(rag_svc, "search_only", boom)
+    out = tools.execute_tool("search_knowledge_base", {"question": "x"},
+                             {"kb": {"enabled": True,
+                                     "accessible_project_ids": ["p1"], "project_id": "p1"}})
+    assert "知识库检索不可用" in out

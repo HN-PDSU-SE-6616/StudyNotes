@@ -167,6 +167,7 @@ def run_agent(
     temperature: float = 0.7,
     tools_enabled: bool = True,
     client_context: Optional[dict] = None,
+    rag_context: Optional[dict] = None,
 ) -> tuple[str, str, bool]:
     """执行带工具循环的对话，返回 (reply, model, used_tools)。
 
@@ -232,7 +233,10 @@ def run_agent(
                 for tc in tool_calls
             ]
             messages.append(asst_msg)
-            ctx: dict[str, Any] = {"client_context": client_context or {}}
+            ctx: dict[str, Any] = {
+                "client_context": client_context or {},
+                "kb": rag_context or {"enabled": False},
+            }
             for tc in tool_calls:
                 result = tools.execute_tool(tc.function.name, tc.function.arguments, ctx)
                 messages.append({

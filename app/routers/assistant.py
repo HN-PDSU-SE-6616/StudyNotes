@@ -20,9 +20,12 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
 
 from app.core.deps import get_optional_user
+from app.core.permissions import PermissionChecker
+from app.database import get_session
 from app.models.user import User
 from app.services import agent
 
@@ -45,6 +48,7 @@ class ChatRequest(SQLModel):
     session_id: Optional[str] = None
     tools: bool = True
     client_context: Optional[dict] = None
+    project_id: Optional[str] = None
 
 
 class ClearContextRequest(SQLModel):
@@ -60,6 +64,20 @@ class ChatResponse(SQLModel):
 
 def _uid(user: Optional[User]) -> str:
     return str(user.id) if user else "anon"
+
+
+async def _rag_context(user: Optional[User], session: AsyncSession,
+                       project_id: Optional[str]) -> Optional[dict]:
+    """登录用户注入知识库检索上下文（可访问项目 + 限定项目），保持 RBAC 权限"""
+    if user is None:
+        return None
+    perm = PermissionChecker(user, session)
+    accessible = await perm.get_accessible_project_ids(include_read=True)
+    return {
+        "enabled": True,
+        "accessible_project_ids": accessible,
+        "project_id": project_id or None,
+    }
 
 
 def _question_of(messages: list[dict]) -> str:
@@ -87,11 +105,13 @@ def _stream_chunks(text: str):
 
 
 @router.post("/chat", response_model=ChatResponse, summary="AI 对话（工具+缓存+会话）")
-async def chat(body: ChatRequest, user: Optional[User] = Depends(get_optional_user)):
+async def chat(body: ChatRequest, user: Optional[User] = Depends(get_optional_user),
+               session: AsyncSession = Depends(get_session)):
     msgs, _, question = _assemble(body)
     if not msgs or not question:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="消息不能为空")
     uid = _uid(user)
+    rag_ctx = await _rag_context(user, session, body.project_id)
     session_mode = False
     history: list[dict] = []
     if body.session_id:
@@ -111,6 +131,7 @@ async def chat(body: ChatRequest, user: Optional[User] = Depends(get_optional_us
             temperature=body.temperature,
             tools_enabled=body.tools,
             client_context=body.client_context,
+            rag_context=rag_ctx,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
@@ -127,11 +148,13 @@ async def chat(body: ChatRequest, user: Optional[User] = Depends(get_optional_us
 
 
 @router.post("/chat/stream", summary="AI 对话流式（SSE，工具/缓存/会话同 /chat）")
-async def chat_stream(body: ChatRequest, user: Optional[User] = Depends(get_optional_user)):
+async def chat_stream(body: ChatRequest, user: Optional[User] = Depends(get_optional_user),
+                      session: AsyncSession = Depends(get_session)):
     msgs, _, question = _assemble(body)
     if not msgs or not question:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="消息不能为空")
     uid = _uid(user)
+    rag_ctx = await _rag_context(user, session, body.project_id)
     session_mode = False
     if body.session_id:
         user_msgs = [m for m in msgs if m["role"] == "user"]
@@ -153,6 +176,7 @@ async def chat_stream(body: ChatRequest, user: Optional[User] = Depends(get_opti
                     temperature=payload.temperature,
                     tools_enabled=payload.tools,
                     client_context=payload.client_context,
+                    rag_context=rag_ctx,
                 )
                 if not text:
                     text = "（空回复）"

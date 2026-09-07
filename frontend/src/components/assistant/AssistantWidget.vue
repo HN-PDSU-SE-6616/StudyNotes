@@ -83,6 +83,7 @@ async function send() {
         temperature: settings.temperature,
         tools: settings.toolsEnabled,
         client_context: clientInfo as unknown as Record<string, string>,
+        project_id: orgStore.activeProject?.id ?? null,
       },
       (delta) => {
         messages.value[lastIdx].content += delta
@@ -269,7 +270,7 @@ onMounted(() => {
             v-model="input"
             rows="1"
             class="taot-assistant-input ap-input"
-            placeholder="输入问题，Enter 发送…（可问天气/IP/系统信息等，需要时我会联网）"
+            placeholder="输入问题，Enter 发送…（可问天气/IP/知识库笔记等，需要时我会检索）"
             @keydown.enter.exact.prevent="send"
           />
           <button class="taot-assistant-send ap-send" :disabled="busy" @click="send">发送</button>
@@ -357,7 +358,7 @@ onMounted(() => {
           <label class="ap-label-row">
             <span>联网/实时工具</span>
             <input v-model="settings.toolsEnabled" type="checkbox" class="ap-check" />
-            <span class="ap-val">天气 · IP · 系统 · 网页搜索</span>
+            <span class="ap-val">知识库检索 · 天气 · IP · 系统 · 网页搜索</span>
           </label>
           <p class="ap-tip">模型与密钥由后端 <code>.env</code>（LLM_MODEL / LLM_API_KEY）统一配置，无需在此填写。</p>
         </section>
