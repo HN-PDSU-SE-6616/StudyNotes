@@ -54,6 +54,12 @@ function Start-IfStopped([string]$name) {
     }
 }
 
+# 仅认可本脚本创建的容器（避免误复用外部同名 postgres/redis/mysql）
+function Test-IsTaot([string]$name) {
+    $lbl = docker inspect -f '{{index .Config.Labels "com.taot.infra"}}' $name 2>$null
+    return ($lbl -eq 'true')
+}
+
 function Ensure-NetConnect([string]$name) {
     # 容器不在 taot-net 时连接（已在则跳过）
     $json = docker inspect -f '{{json .NetworkSettings.Networks}}' $name 2>$null
@@ -74,10 +80,14 @@ function Test-HostPortFree([int]$port) {
 
 # ---------- PostgreSQL ----------
 function Ensure-Postgres {
-    if (Test-ContainerExists 'taot-postgres') {
-        Start-IfStopped 'taot-postgres'
-        Ensure-NetConnect 'taot-postgres'
-        Write-Host '[postgres] 复用已有容器 taot-postgres' -ForegroundColor Green
+    if (Test-ContainerExists 'postgres') {
+        if (-not (Test-IsTaot 'postgres')) {
+            Write-Host '[postgres] 存在外部同名容器 postgres，跳过创建（请自行管理连接）。' -ForegroundColor Yellow
+            return
+        }
+        Start-IfStopped 'postgres'
+        Ensure-NetConnect 'postgres'
+        Write-Host '[postgres] 复用已有容器 postgres' -ForegroundColor Green
         return
     }
     if (-not (Test-HostPortFree 5432)) {
@@ -85,8 +95,9 @@ function Ensure-Postgres {
         Write-Host '          若改用本机 PostgreSQL，请同步修改 .env 中 DATABASE_URL 连接地址。' -ForegroundColor Gray
         return
     }
-    Write-Host '[postgres] 创建独立容器 taot-postgres（数据卷复用 taot-kb_pg_data）...' -ForegroundColor Yellow
-    docker run -d --name taot-postgres --network $Net `
+    Write-Host '[postgres] 创建独立容器 postgres（数据卷复用 taot-kb_pg_data）...' -ForegroundColor Yellow
+    docker run -d --name postgres --network $Net `
+        --label com.taot.infra=true `
         -v "${PgDataVol}:/var/lib/postgresql/data" `
         -p 5432:5432 `
         -e POSTGRES_USER=taot -e POSTGRES_PASSWORD=$Pw -e POSTGRES_DB=taot `
@@ -95,18 +106,23 @@ function Ensure-Postgres {
 
 # ---------- Redis ----------
 function Ensure-Redis {
-    if (Test-ContainerExists 'taot-redis') {
-        Start-IfStopped 'taot-redis'
-        Ensure-NetConnect 'taot-redis'
-        Write-Host '[redis] 复用已有容器 taot-redis' -ForegroundColor Green
+    if (Test-ContainerExists 'redis') {
+        if (-not (Test-IsTaot 'redis')) {
+            Write-Host '[redis] 存在外部同名容器 redis，跳过创建（请自行管理连接）。' -ForegroundColor Yellow
+            return
+        }
+        Start-IfStopped 'redis'
+        Ensure-NetConnect 'redis'
+        Write-Host '[redis] 复用已有容器 redis' -ForegroundColor Green
         return
     }
     if (-not (Test-HostPortFree 6379)) {
         Write-Host '[redis] 6379 已被本机/其它服务占用：跳过创建。' -ForegroundColor Yellow
         return
     }
-    Write-Host '[redis] 创建独立容器 taot-redis（数据卷复用 taot-kb_redis_data）...' -ForegroundColor Yellow
-    docker run -d --name taot-redis --network $Net `
+    Write-Host '[redis] 创建独立容器 redis（数据卷复用 taot-kb_redis_data）...' -ForegroundColor Yellow
+    docker run -d --name redis --network $Net `
+        --label com.taot.infra=true `
         -v "${RedisDataVol}:/data" `
         -p 6379:6379 `
         --restart unless-stopped redis:7-alpine redis-server --appendonly yes | Out-Null
@@ -133,10 +149,14 @@ function Ensure-Qdrant {
 
 # ---------- MySQL（仅供本机其他项目复用；本项目使用 PostgreSQL） ----------
 function Ensure-Mysql {
-    if (Test-ContainerExists 'taot-mysql') {
-        Start-IfStopped 'taot-mysql'
-        Ensure-NetConnect 'taot-mysql'
-        Write-Host '[mysql] 复用已有容器 taot-mysql' -ForegroundColor Green
+    if (Test-ContainerExists 'mysql') {
+        if (-not (Test-IsTaot 'mysql')) {
+            Write-Host '[mysql] 存在外部同名容器 mysql，跳过创建（请自行管理连接）。' -ForegroundColor Yellow
+            return
+        }
+        Start-IfStopped 'mysql'
+        Ensure-NetConnect 'mysql'
+        Write-Host '[mysql] 复用已有容器 mysql' -ForegroundColor Green
         return
     }
     if (-not (Test-HostPortFree 3306)) {
@@ -145,8 +165,9 @@ function Ensure-Mysql {
         Write-Host '            Stop-Service MySQL84; Set-Service MySQL84 -StartupType Disabled' -ForegroundColor White
         return
     }
-    Write-Host '[mysql] 创建独立容器 taot-mysql（root/root@123, 数据卷 taot_mysql_data）...' -ForegroundColor Yellow
-    docker run -d --name taot-mysql --network $Net `
+    Write-Host '[mysql] 创建独立容器 mysql（root/root@123, 数据卷 taot_mysql_data）...' -ForegroundColor Yellow
+    docker run -d --name mysql --network $Net `
+        --label com.taot.infra=true `
         -v "${MysqlDataVol}:/var/lib/mysql" `
         -p 3306:3306 `
         -e MYSQL_ROOT_PASSWORD='root@123' `

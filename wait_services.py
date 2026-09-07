@@ -1,15 +1,15 @@
 """容器启动依赖等待：轮询基础服务端口就绪后退出 0。
 
 用法: python wait_services.py [host:port ...]
-默认等待: taot-postgres:5432 taot-redis:6379 qdrant:6333
+默认等待: postgres:5432 redis:6379 qdrant:6333
 """
 import socket
 import sys
 import time
 
 DEFAULT_TARGETS = [
-    ("taot-postgres", 5432),
-    ("taot-redis", 6379),
+    ("postgres", 5432),
+    ("redis", 6379),
     ("qdrant", 6333),
 ]
 RETRIES = 40  # 每 2s 一次，最长约 80s

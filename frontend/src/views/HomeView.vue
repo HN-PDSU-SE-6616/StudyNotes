@@ -32,13 +32,13 @@
         </div>
 
         <div v-if="loading" class="text-sm text-slate-400 py-8 text-center">加载中…</div>
-        <div v-else-if="!orgStore.orgs.length" class="text-sm text-slate-400 py-8 text-center bg-white rounded-2xl">
+        <div v-else-if="!orgCards.length" class="text-sm text-slate-400 py-8 text-center bg-white rounded-2xl">
           还没有组织，创建一个开始记录你的知识吧。
         </div>
 
         <div class="grid gap-4 md:grid-cols-2">
           <div
-            v-for="org in orgStore.orgs"
+            v-for="org in orgCards"
             :key="org.id"
             class="bg-white rounded-2xl border border-slate-200 p-5 hover:shadow-md transition-shadow"
           >

@@ -20,9 +20,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://taot:taot@taot-postgres:5432/taot
+      - DATABASE_URL=postgresql+asyncpg://taot:taot@postgres:5432/taot
       - QDRANT_URL=http://qdrant:6333
-      - REDIS_URL=redis://taot-redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=1440
@@ -52,9 +52,9 @@ services:
       timeout: 5s
       retries: 3
     environment:
-      - DATABASE_URL=postgresql+asyncpg://taot:taot@taot-postgres:5432/taot
+      - DATABASE_URL=postgresql+asyncpg://taot:taot@postgres:5432/taot
       - QDRANT_URL=http://qdrant:6333
-      - REDIS_URL=redis://taot-redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
       - LLM_API_KEY=${LLM_API_KEY:-}
@@ -81,9 +81,9 @@ services:
       timeout: 5s
       retries: 3
     environment:
-      - DATABASE_URL=postgresql+asyncpg://taot:taot@taot-postgres:5432/taot
+      - DATABASE_URL=postgresql+asyncpg://taot:taot@postgres:5432/taot
       - QDRANT_URL=http://qdrant:6333
-      - REDIS_URL=redis://taot-redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
       - STORAGE_ROOT=/app/storage

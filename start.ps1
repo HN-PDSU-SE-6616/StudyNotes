@@ -1,8 +1,8 @@
-# ============================================================
+﻿# ============================================================
 #   Taot Knowledge Base v3.1 - One-Click Start (uv) [PowerShell]
 #   Usage : powershell -ExecutionPolicy Bypass -File start.ps1
 #   依赖   : uv (>=0.5), Node.js (>=18), Docker (可选，用于基础设施)
-#   前置   : docker compose up -d postgres qdrant redis
+#   前置   : powershell -ExecutionPolicy Bypass -File .\deploy\infra.ps1
 # ============================================================
 
 $ErrorActionPreference = 'Continue'
@@ -51,9 +51,9 @@ Write-Host "[OK] Node.js: v$nodeVersionRaw" -ForegroundColor Green
 $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
 if ($dockerCmd) {
     Write-Host '[INFO] 正在确认基础设施容器（postgres/qdrant/redis）...' -ForegroundColor White
-    docker compose up -d postgres qdrant redis 2>&1 | Out-Host
+    powershell -ExecutionPolicy Bypass -File .\deploy\infra.ps1 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) {
-        Write-Host '[WARNING] 基础设施启动失败，请稍后手动执行：docker compose up -d postgres qdrant redis' -ForegroundColor Yellow
+        Write-Host '[WARNING] 基础设施启动失败，请稍后手动执行：powershell -ExecutionPolicy Bypass -File .\deploy\infra.ps1' -ForegroundColor Yellow
     } else {
         Write-Host '[OK] 基础设施已就绪' -ForegroundColor Green
     }

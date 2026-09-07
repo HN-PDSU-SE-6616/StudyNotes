@@ -29,7 +29,7 @@ docker compose up -d --build backend worker beat
 > `powershell -ExecutionPolicy Bypass -File deploy/infra.ps1 -OnlyMysql`
 >
 > **环境感知**：若本机已有同端口服务，`deploy/infra.ps1` 会跳过该容器并提示；此时把连接地址改为本机服务即可（不重复创建）。
-> 独立容器位于外部网络 `taot-net`，应用内主机名：`taot-postgres` / `taot-redis` / `qdrant` / `taot-mysql`。
+> 独立容器位于外部网络 `taot-net`，应用内主机名：`postgres` / `redis` / `qdrant` / `mysql`。
 
 启用本地 Embedding（镜像较大，需安装 torch）：
 
