@@ -171,7 +171,7 @@ import { ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { usePageStore } from '@/stores/page'
-import { pagesApi } from '@/api/pages'
+import type { ImportResponse } from '@/api/imports'
 import type { PageTreeNode as PageTreeNodeType } from '@/types'
 import UserAvatar from '@/components/common/UserAvatar.vue'
 import PageTreeNode from './PageTreeNode.vue'
@@ -212,11 +212,11 @@ const searchInput = ref('')
 const dirInput = ref<HTMLInputElement>()
 const fileInput = ref<HTMLInputElement>()
 const importDialogOpen = ref(false)
-const importParentId = ref<number>(0)
+const importTargetId = ref<string>('')
 const importing = ref(false)
 
-function triggerImport(pageId: number) {
-  importParentId.value = pageId
+function triggerImport(pageId: string | number) {
+  importTargetId.value = pageId ? String(pageId) : ''
   importDialogOpen.value = true
 }
 
@@ -248,29 +248,9 @@ async function onImportFiles(e: Event) {
 
 async function uploadImportFiles(fileList: FileList) {
   const formData = new FormData()
-  if (importParentId.value) {
-    formData.append('parent_id', String(importParentId.value))
-  }
-
-  // 单文件导入时检测重名
-  if (fileList.length === 1 && importParentId.value) {
-    const file = fileList[0]
-    const fileName = file.name
-    const title = fileName.replace(/\.[^.]+$/, '')
-    try {
-      const { data } = await pagesApi.checkDuplicate(importParentId.value, title)
-      if (data.exists) {
-        const confirmed = confirm(
-          `页面「${title}」已存在，是否覆盖该页面？\n\n点击"确定"将覆盖已有页面，点击"取消"将跳过导入。`
-        )
-        if (!confirmed) {
-          return
-        }
-        formData.append('overwrite', 'true')
-      }
-    } catch {
-      // 检查失败，继续导入
-    }
+  // 指定目标笔记时：顶层文档合并进该笔记，子目录作为其子笔记
+  if (importTargetId.value) {
+    formData.append('target_note_id', importTargetId.value)
   }
 
   for (let i = 0; i < fileList.length; i++) {
@@ -281,11 +261,21 @@ async function uploadImportFiles(fileList: FileList) {
   }
   importing.value = true
   try {
-    const data = await pageStore.importPages(formData)
+    const data: ImportResponse | null = await pageStore.importPages(formData)
     // 等待 Vue 完成响应式更新后再切换页面
     await nextTick()
-    if (data && data.length > 0 && data[0].id) {
-      emit('select', data[0].id)
+    if (!data) {
+      alert('导入失败：请确认后端已启动且你有该项目的写权限')
+      return
+    }
+    const targetId = importTargetId.value
+    if (targetId) {
+      // 导入到已有笔记：刷新该笔记（顶层内容已合并）
+      emit('select', targetId)
+    } else if (data.root_note_id) {
+      emit('select', data.root_note_id)
+    } else if (data.skipped.length && !data.created.length) {
+      alert('内容已存在，本次导入已跳过（如需重建请勾选覆盖重新导入）')
     }
   } finally {
     importing.value = false

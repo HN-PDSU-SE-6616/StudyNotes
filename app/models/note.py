@@ -60,6 +60,8 @@ class Note(SQLModel, table=True):
     last_editor_id: Optional[int] = Field(default=None, foreign_key="user.id")
     # 来源文件（经文件流水线导入时记录）
     source_file_id: Optional[str] = Field(default=None, foreign_key="file_metadata.id")
+    # 目录/文件导入时记录的源相对路径（重导幂等判定依据；文件流水线置 None）
+    source_path: Optional[str] = Field(default=None, index=True, max_length=500)
     view_count: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

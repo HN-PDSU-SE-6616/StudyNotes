@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { pagesApi, blocksApi } from '@/api/pages'
-import { filesApi } from '@/api/files'
+import { importsApi, type ImportResponse } from '@/api/imports'
 import { useOrgStore } from '@/stores/org'
 import type { Block, PageDetail, PageTreeNode } from '@/types'
 
@@ -208,30 +208,17 @@ export const usePageStore = defineStore('page', () => {
     return data
   }
 
-  /** 兼容旧“目录/文件导入”：逐文件上传为文档并轮询解析 */
-  async function importPages(formData: FormData) {
+  /** 目录/文件批量导入：后端一次建树（目录结构 = note 树），返回导入结果 */
+  async function importPages(formData: FormData): Promise<ImportResponse | null> {
     const pid = projectId()
-    const files = Array.from(formData.getAll('files')) as unknown as File[]
-    const list = files.length ? files : (Array.from(formData.entries()).map(([, v]) => v) as unknown as File[])
-    const results: unknown[] = []
-    for (const file of list) {
-      if (!(file instanceof File)) continue
-      const { data } = await filesApi.upload(pid, file, 'document')
-      results.push(data)
+    try {
+      const { data } = await importsApi.importNotes(pid, formData)
+      await fetchTree()
+      return data
+    } catch {
+      // 失败交由调用方提示
+      return null
     }
-    await fetchTree()
-    return results
-  }
-
-  async function importFiles(fileList: File[]) {
-    const pid = projectId()
-    const results: unknown[] = []
-    for (const file of fileList) {
-      const { data } = await filesApi.upload(pid, file, 'document')
-      results.push(data)
-    }
-    await fetchTree()
-    return results
   }
 
   async function searchPages(q: string) {
@@ -270,7 +257,6 @@ export const usePageStore = defineStore('page', () => {
     reorderBlocks,
     importToPage,
     importPages,
-    importFiles,
     searchPages,
   }
 })

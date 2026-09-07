@@ -54,11 +54,17 @@ async def parse_file_now(file_id: str, session) -> None:
         if not project:
             raise RuntimeError("文档缺少归属项目（project_id）")
 
-        # 解析源文件名作为笔记标题（去扩展名）
+        # 解析源文件名作为默认标题；若首个 H1 存在则同步为标题
         stem = os.path.splitext(os.path.basename(file_meta.original_name))[0][:200] or "导入文档"
+        title = stem
+        for block in blocks or []:
+            c = block.get("content") or {}
+            if block.get("type") == "heading" and c.get("level") == 1 and str(c.get("text") or "").strip():
+                title = str(c["text"]).strip()[:200]
+                break
         note = Note(
             project_id=project.id,
-            title=stem,
+            title=title,
             icon=FILE_ICON.get(file_meta.parser_type or "unknown", "📎"),
             owner_id=file_meta.owner_id,
             creator_id=file_meta.owner_id,

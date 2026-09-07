@@ -361,6 +361,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePageStore } from '@/stores/page'
+import { useOrgStore } from '@/stores/org'
 import { pagesApi } from '@/api/pages'
 import { filesApi } from '@/api/files'
 import type { PageTreeNode, Block } from '@/types'
@@ -1049,10 +1050,14 @@ async function onGlobalPaste(e: ClipboardEvent) {
         if (blob) {
           try {
             const file = new File([blob], `paste-${Date.now()}.png`, { type: blob.type || 'image/png' })
-            const { data } = await filesApi.upload(file)
-            if (data.url) {
-              pushUndo()
-              await pageStore.addBlock(page.value.id, 'image', { url: data.url, alt: '' })
+            const pid = useOrgStore().activeProject?.id
+            if (pid) {
+              const { data } = await filesApi.upload(pid, file, 'asset')
+              const url = filesApi.contentUrl(data.id)
+              if (url) {
+                pushUndo()
+                await pageStore.addBlock(page.value.id, 'image', { url, alt: '' })
+              }
             }
           } catch { /* ignore */ }
           return
