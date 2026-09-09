@@ -77,9 +77,13 @@ def _preset_dim() -> Optional[int]:
 
 
 def provider() -> str:
-    if settings.embedding_provider.lower() in ("api", "remote", "openai") or (
-        settings.embedding_base_url and settings.embedding_api_key
-    ):
+    """生效的提供方：显式 provider 字段为准（api/remote/openai → api，其余 local）
+
+    注：远程接口必须显式 EMBEDDING_PROVIDER=api；base_url/key 单独存在不自动推断，
+    避免与“显式 local + 遗留 url/key”的配置冲突。
+    """
+    p = (settings.embedding_provider or "").lower()
+    if p in ("api", "remote", "openai"):
         return "api"
     return "local"
 
@@ -139,6 +143,8 @@ def _api_embed(texts: list[str]) -> list[list[float]]:
         raise RuntimeError(
             f"远程 Embedding 调用失败: {type(exc).__name__}: {exc}。"
             "请检查 EMBEDDING_BASE_URL / EMBEDDING_API_KEY / EMBEDDING_MODEL。"
+            "提示：404 多为 base_url 路径问题——容器内服务若把 OpenAI 兼容路由挂在 /v1 下，"
+            "EMBEDDING_BASE_URL 需以 /v1 结尾（如 http://127.0.0.1:6080/v1）。"
         ) from exc
     data = sorted(resp.data, key=lambda d: d.index)
     vectors = [list(d.embedding) for d in data]

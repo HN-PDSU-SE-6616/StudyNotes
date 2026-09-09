@@ -1,0 +1,64 @@
+# ============================================================
+#   Taot 知识库 — APM 观测栈（Prometheus + Grafana）
+#   独立于应用编排运行，加入外部网络 taot-net（需先跑 deploy/infra.ps1）。
+#
+#   用法：
+#     docker compose -f deploy/monitoring/docker-compose.yml up -d
+#   访问：
+#     Prometheus  http://localhost:9090
+#     Grafana     http://localhost:3000   （admin / admin，首登可改）
+#   抓取目标：
+#     本地跑后端 → host.docker.internal:8000/metrics
+#     （若后端在容器 taot-backend 内 → 改 prometheus.yml 为 taot-backend:8000）
+# ============================================================
+name: taot-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: taot-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - taot-net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: taot-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - taot-net
+    restart: unless-stopped
+
+networks:
+  # 复用应用的基础外部网络（由 deploy/infra.ps1 创建）；未创建时先执行 infra.ps1
+  taot-net:
+    name: taot-net
+    external: true
+
+volumes:
+  prom_data:
+  grafana_data:

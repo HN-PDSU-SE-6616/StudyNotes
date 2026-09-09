@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { assistantApi, streamAssistantChat, type ChatMsg } from '@/api/assistant'
-import { ragApi } from '@/api/files'
+import { assistantApi, streamAssistantChat, type ChatMsg, type PlanStep } from '@/api/assistant'
+import { filesApi, ragApi } from '@/api/files'
 import { useAssistantStore, PRESET_ICONS, BALL_BG_COLORS, PANEL_BG_CHOICES } from '@/stores/assistant'
 import { useOrgStore } from '@/stores/org'
 import { renderAssistantMarkdown } from '@/utils/markdown'
+import { mediaUrl } from '@/utils/media'
 import { detectClientInfo, type ClientInfo } from '@/utils/clientInfo'
 import type { RagSource } from '@/types'
 
@@ -17,9 +18,68 @@ const open = ref(false)
 const tab = ref<'chat' | 'settings'>('chat')
 const busy = ref(false)
 const error = ref('')
+
+// ===== 桌宠位置 / 面板全屏（本地持久化） =====
+const BALL_POS_KEY = 'taot.assistant.ballpos'
+const PANEL_MODE_KEY = 'taot.assistant.panelmode'
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : fallback
+  } catch {
+    return fallback
+  }
+}
+const ballPos = ref<{ x: number; y: number } | null>(readJson<{ x: number; y: number } | null>(BALL_POS_KEY, null))
+const panelMode = ref<'window' | 'full'>(readJson<string>(PANEL_MODE_KEY, 'window') === 'full' ? 'full' : 'window')
+
+function persistPanelMode() {
+  try { localStorage.setItem(PANEL_MODE_KEY, JSON.stringify(panelMode.value)) } catch { /* ignore */ }
+}
+function toggleFullscreen() {
+  panelMode.value = panelMode.value === 'full' ? 'window' : 'full'
+  persistPanelMode()
+  scrollBottom()
+}
+
+// 桌宠拖拽（拖动时不触发点击，按下/抬起距离 < 6px 视为点击）
+let dragState: { startX: number; startY: number; moved: boolean } | null = null
+function onBallPointerDown(e: PointerEvent) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return
+  e.preventDefault()
+  dragState = { startX: e.clientX, startY: e.clientY, moved: false }
+  const el = (e.currentTarget as HTMLElement)
+  const rect = el.getBoundingClientRect()
+  const onMove = (ev: PointerEvent) => {
+    if (!dragState) return
+    const dx = ev.clientX - dragState.startX
+    const dy = ev.clientY - dragState.startY
+    if (!dragState.moved && Math.hypot(dx, dy) > 6) dragState.moved = true
+    if (!dragState.moved) return
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    ballPos.value = {
+      x: Math.min(Math.max(4, rect.left + dx), vw - rect.width - 4),
+      y: Math.min(Math.max(4, rect.top + dy), vh - rect.height - 4),
+    }
+  }
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove)
+    if (dragState?.moved && ballPos.value) {
+      try { localStorage.setItem(BALL_POS_KEY, JSON.stringify(ballPos.value)) } catch { /* ignore */ }
+    } else if (dragState && !dragState.moved) {
+      open.value = !open.value
+    }
+    dragState = null
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp, { once: true })
+  window.addEventListener('pointercancel', onUp, { once: true })
+}
 const messages = ref<ChatMsg[]>([{ role: 'assistant', content: settings.greeting }])
 const input = ref('')
 const ragSources = ref<RagSource[]>([])
+const planSteps = ref<PlanStep[]>([])
 const listRef = ref<HTMLDivElement>()
 const iconFile = ref<HTMLInputElement>()
 const panelImgInput = ref<HTMLInputElement>()
@@ -32,9 +92,12 @@ let clientInfo: ClientInfo | null = null
 const ballStyle = computed(() => ({
   width: `${settings.size}px`,
   height: `${settings.size}px`,
-  background: settings.ballBg || 'linear-gradient(135deg,#6366f1,#a855f7)',
-  fontSize: `${Math.max(16, settings.size * 0.52)}px`,
+  fontSize: `${Math.max(20, settings.size * 0.82)}px`,
   opacity: settings.ballOpacity,
+  ...(ballPos.value ? {
+    left: `${ballPos.value.x}px`, top: `${ballPos.value.y}px`,
+    right: 'auto', bottom: 'auto',
+  } : {}),
 }))
 const surface = settings.theme === 'dark' ? '#111827' : '#ffffff'
 const panelBg = settings.panelBg || ''
@@ -44,7 +107,7 @@ const panelVars = computed(() => ({
   '--ap-msgs-bg': settings.theme === 'dark' ? 'rgba(17, 24, 39, 0.82)' : 'rgba(255, 255, 255, 0.85)',
   '--ap-bg-layer': isGradientBg ? panelBg : 'none',
   '--ap-bg-color': (!isGradientBg && panelBg) ? panelBg : surface,
-  '--ap-img': settings.panelImage ? `url("${settings.panelImage}")` : 'none',
+  '--ap-img': settings.panelImage ? `url("${mediaUrl(settings.panelImage)}")` : 'none',
   '--ap-text': settings.theme === 'dark' ? '#e5e7eb' : '#1f2937',
   '--ap-sub': settings.theme === 'dark' ? '#9ca3af' : '#64748b',
   '--ap-bubble': settings.theme === 'dark' ? '#1f2937' : '#ffffff',
@@ -73,6 +136,7 @@ async function send() {
   messages.value.push({ role: 'user', content: text })
   busy.value = true
   ragSources.value = []
+  planSteps.value = []
   const lastIdx = messages.value.length
   try {
     if (settings.mode === 'rag') {
@@ -91,12 +155,16 @@ async function send() {
         system: settings.system,
         temperature: settings.temperature,
         tools: settings.toolsEnabled,
+        mode: settings.deepPlan ? 'auto' : 'simple',
         client_context: clientInfo as unknown as Record<string, string>,
         project_id: orgStore.activeProject?.id ?? null,
       },
       (delta) => {
         messages.value[lastIdx].content += delta
         scrollBottom()
+      },
+      (steps) => {
+        planSteps.value = steps || []
       },
     )
     if (!messages.value[lastIdx].content && reply) messages.value[lastIdx].content = reply
@@ -139,13 +207,22 @@ function onIconUpload(e: Event) {
     alert('图标图片请控制在 1.5MB 以内')
     return
   }
-  const reader = new FileReader()
-  reader.onload = () => {
-    settings.ballIconUrl = String(reader.result || '')
-    settings.ballIcon = PRESET_ICONS[0]
-  }
-  reader.readAsDataURL(file)
-  input.value = ''
+  void uploadUserMedia(file, 'assistant_icon').then((url) => {
+    if (url) {
+      // 已登录：上传到后端 /files/mine，跨设备/存储友好
+      settings.ballIconUrl = url
+      settings.ballIcon = PRESET_ICONS[0]
+    } else {
+      // 未登录或后端不可达：base64 本地回退
+      const reader = new FileReader()
+      reader.onload = () => {
+        settings.ballIconUrl = String(reader.result || '')
+        settings.ballIcon = PRESET_ICONS[0]
+      }
+      reader.readAsDataURL(file)
+    }
+    input.value = ''
+  })
 }
 
 function onPanelImageUpload(e: Event) {
@@ -156,12 +233,29 @@ function onPanelImageUpload(e: Event) {
     alert('面板背景图请控制在 3MB 以内')
     return
   }
-  const reader = new FileReader()
-  reader.onload = () => {
-    settings.panelImage = String(reader.result || '')
+  void uploadUserMedia(file, 'assistant_bg').then((url) => {
+    if (url) {
+      settings.panelImage = url
+    } else {
+      const reader = new FileReader()
+      reader.onload = () => {
+        settings.panelImage = String(reader.result || '')
+      }
+      reader.readAsDataURL(file)
+    }
+    input.value = ''
+  })
+}
+
+/** 用户级媒体上传：返回后端 URL；未登录/失败返回 null */
+async function uploadUserMedia(file: File, category: 'assistant_icon' | 'assistant_bg'): Promise<string | null> {
+  if (!localStorage.getItem('access_token')) return null
+  try {
+    const { data } = await filesApi.uploadMine(file, category)
+    return filesApi.contentUrl(data.id, true)
+  } catch {
+    return null
   }
-  reader.readAsDataURL(file)
-  input.value = ''
 }
 
 function applyDiy() {
@@ -191,6 +285,7 @@ function resetDiy() {
     effectType: 'float',
     temperature: 0.7,
     toolsEnabled: true,
+    deepPlan: true,
     system: '你是一位乐于助人的 AI 助手。回答请简洁、准确，需要实时/外部信息时使用工具。',
     customCss: '',
     customJs: '',
@@ -239,18 +334,18 @@ onMounted(() => {
       class="taot-assistant-ball ap-ball"
       :class="effectClass"
       :style="ballStyle"
-      title="AI 助手"
-      @click="open = !open"
+      title="AI 助手（可拖拽移动，点击对话）"
+      @pointerdown="onBallPointerDown"
     >
-      <img v-if="settings.ballIconUrl" :src="settings.ballIconUrl" class="ap-ball-icon" alt="assistant" />
-      <span v-else>{{ settings.ballIcon }}</span>
+      <img v-if="settings.ballIconUrl" :src="mediaUrl(settings.ballIconUrl)" class="ap-ball-icon" alt="assistant" />
+      <span v-else class="ap-ball-emoji">{{ settings.ballIcon }}</span>
     </button>
 
     <!-- 助手面板 -->
     <div
       v-if="open"
       class="taot-assistant-panel ap-panel"
-      :class="[themeClass, { 'taot-effect-glow-panel': settings.effectOn && settings.effectType === 'glow' }]"
+      :class="[themeClass, { 'ap-panel--full': panelMode === 'full', 'taot-effect-glow-panel': settings.effectOn && settings.effectType === 'glow' }]"
       :style="panelVars"
     >
       <div class="ap-head">
@@ -259,6 +354,9 @@ onMounted(() => {
         <button class="ap-head-btn" title="清空上下文" @click="clearChat">🗑</button>
         <button class="ap-head-btn" :title="tab === 'chat' ? '设置' : '对话'" @click="tab = tab === 'chat' ? 'settings' : 'chat'">
           {{ tab === 'chat' ? '⚙️' : '💬' }}
+        </button>
+        <button class="ap-head-btn" :title="panelMode === 'full' ? '还原为窗口' : '全屏对话'" @click="toggleFullscreen">
+          {{ panelMode === 'full' ? '🗗' : '⛶' }}
         </button>
         <button class="ap-head-btn" title="隐藏助手（可从小图标找回）" @click="hideBall">🗕</button>
         <button class="ap-head-btn" title="关闭" @click="open = false">✕</button>
@@ -276,6 +374,17 @@ onMounted(() => {
             />
           </div>
           <div v-if="busy" class="ap-hint">正在思考…</div>
+
+          <!-- 计划层执行步骤 -->
+          <div v-if="planSteps.length" class="ap-plan-steps">
+            <div class="ap-hint">任务拆解执行中</div>
+            <div v-for="(s, i) in planSteps" :key="i" class="ap-plan-step">
+              <span class="ap-plan-step-idx">{{ i + 1 }}</span>
+              <span class="flex-1 min-w-0 truncate">{{ s.goal }}</span>
+              <span v-if="s.summary" class="ap-plan-step-ok">✔</span>
+            </div>
+          </div>
+
           <p v-if="error" class="ap-error">{{ error }}</p>
 
           <!-- RAG 来源 -->
@@ -307,10 +416,10 @@ onMounted(() => {
       <!-- 设置 -->
       <div v-else class="taot-assistant-settings ap-settings">
         <section class="ap-sec">
-          <h4 class="ap-sec-title">悬浮球外观</h4>
+          <h4 class="ap-sec-title">桌宠外观（无气泡透明角色）</h4>
           <label class="ap-label-row">
             <span>尺寸</span>
-            <input v-model.number="settings.size" type="range" min="36" max="120" class="ap-range" />
+            <input v-model.number="settings.size" type="range" min="32" max="160" class="ap-range" />
             <b class="ap-val">{{ settings.size }}px</b>
           </label>
           <label class="ap-label-row">
@@ -319,7 +428,7 @@ onMounted(() => {
             <b class="ap-val">{{ Math.round(settings.ballOpacity * 100) }}%</b>
           </label>
           <div class="ap-label">
-            <span>图标</span>
+            <span>角色（emoji / 透明图片）</span>
             <div class="ap-icon-grid">
               <button
                 v-for="ic in PRESET_ICONS"
@@ -330,24 +439,9 @@ onMounted(() => {
               >{{ ic }}</button>
             </div>
             <div class="ap-inline">
-              <button class="ap-btn-soft" @click="iconFile?.click()">🖼 上传图片</button>
+              <button class="ap-btn-soft" @click="iconFile?.click()">🖼 上传透明角色图（PNG/GIF/SVG）</button>
               <button v-if="settings.ballIconUrl" class="ap-btn-soft" @click="settings.ballIconUrl = ''">移除图片</button>
               <input ref="iconFile" type="file" accept="image/*" class="hidden" @change="onIconUpload" />
-            </div>
-          </div>
-          <div class="ap-label">
-            <span>球背景</span>
-            <div class="ap-color-grid">
-              <button
-                v-for="bg in BALL_BG_COLORS"
-                :key="bg"
-                class="ap-color-opt"
-                :class="{ active: settings.ballBg === bg }"
-                :style="{ background: bg }"
-                :title="bg"
-                @click="settings.ballBg = bg"
-              />
-              <input v-model="settings.ballBg" type="color" class="ap-color-custom" title="自定义颜色" />
             </div>
           </div>
           <label class="ap-label">
@@ -382,7 +476,7 @@ onMounted(() => {
               <button v-if="settings.panelImage" class="ap-btn-soft" @click="settings.panelImage = ''">移除图片</button>
               <input ref="panelImgInput" type="file" accept="image/*" class="hidden" @change="onPanelImageUpload" />
             </div>
-            <img v-if="settings.panelImage" :src="settings.panelImage" class="ap-panel-preview" alt="panel bg preview" />
+            <img v-if="settings.panelImage" :src="mediaUrl(settings.panelImage)" class="ap-panel-preview" alt="panel bg preview" />
           </div>
           <label class="ap-label-row">
             <span>对话方式</span>
@@ -399,7 +493,12 @@ onMounted(() => {
           <label class="ap-label-row">
             <span>联网/实时工具</span>
             <input v-model="settings.toolsEnabled" type="checkbox" class="ap-check" />
-            <span class="ap-val">知识库检索 · 天气 · IP · 系统 · 网页搜索</span>
+            <span class="ap-val">知识库检索 · 天气 · IP · 系统 · 网页搜索/研究工作流</span>
+          </label>
+          <label class="ap-label-row">
+            <span>深度规划（任务拆解）</span>
+            <input v-model="settings.deepPlan" type="checkbox" class="ap-check" />
+            <span class="ap-val">复杂问题自动拆分子任务（知识库/联网/实时组合）</span>
           </label>
           <p class="ap-tip">模型与密钥由后端 <code>.env</code>（LLM_MODEL / LLM_API_KEY）统一配置，无需在此填写。</p>
         </section>
@@ -467,18 +566,35 @@ onMounted(() => {
   right: 1rem;
   bottom: 1.25rem;
   z-index: 9990;
-  border-radius: 9999px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.25);
-  cursor: pointer;
+  /* 桌宠化：无圆形气泡、无底色，透明背景（可放 emoji/透明 PNG/GIF） */
+  background: transparent !important;
   border: none;
-  transition: transform 0.15s ease;
+  border-radius: 0;
+  box-shadow: none;
+  color: inherit;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  outline: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
-.ap-ball:hover { transform: scale(1.08); }
-.ap-ball-icon { width: 60%; height: 60%; object-fit: contain; border-radius: 9999px; }
+/* 角色图：原样透明展示（含动图），整图即命中区 */
+.ap-ball-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+/* 纯 emoji 角色：无底、轻微投影增加辨识度 */
+.ap-ball-emoji {
+  display: block;
+  line-height: 1;
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.18));
+}
 
 .ap-panel {
   position: fixed;
@@ -502,6 +618,35 @@ onMounted(() => {
   flex-direction: column;
   overflow: hidden;
   font-size: 14px;
+}
+
+/* 全屏模式（PC 面板 ⛶ 切换） */
+.ap-panel--full {
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+}
+
+/* 移动端：助手面板打开即全屏（忽略窗口/悬浮位置），底部留安全区 */
+@media (max-width: 767px) {
+  .ap-ball { touch-action: none; }
+  .ap-panel {
+    inset: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    height: 100dvh !important;
+    max-width: 100vw;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+  .ap-inputbar {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+  }
+  .ap-msgs { padding-bottom: 0.25rem; }
 }
 
 .ap-head {
@@ -552,6 +697,24 @@ onMounted(() => {
   font-size: 12px; cursor: pointer; border: none; margin-top: 2px;
 }
 .ap-source:hover { background: rgba(99, 102, 241, 0.16); }
+
+/* ============ 计划层执行步骤 ============ */
+.ap-plan-steps {
+  display: flex; flex-direction: column; gap: 3px;
+  margin: 2px 0 4px; padding: 6px 8px;
+  border: 1px dashed var(--ap-bubble-line); border-radius: 10px;
+}
+.ap-plan-step {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--ap-sub); line-height: 1.4;
+}
+.ap-plan-step-idx {
+  width: 16px; height: 16px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 9999px; font-size: 10px;
+  background: rgba(99, 102, 241, 0.14); color: #6366f1;
+}
+.ap-plan-step-ok { color: #10b981; font-size: 11px; flex-shrink: 0; }
 
 .ap-inputbar {
   display: flex; gap: 0.5rem; align-items: flex-end;
@@ -652,10 +815,10 @@ onMounted(() => {
 
 /* ============ 内置默认动态特效 ============ */
 @keyframes ap-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
-@keyframes ap-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.45); } 70% { box-shadow: 0 0 0 14px rgba(99, 102, 241, 0); } }
-@keyframes ap-glow { 0%, 100% { filter: drop-shadow(0 0 2px rgba(168, 85, 247, 0.5)); } 50% { filter: drop-shadow(0 0 14px rgba(168, 85, 247, 0.9)); } }
+@keyframes ap-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+@keyframes ap-glow { 0%, 100% { filter: drop-shadow(0 0 3px rgba(168, 85, 247, 0.5)); } 50% { filter: drop-shadow(0 0 16px rgba(168, 85, 247, 0.95)); } }
 .taot-effect-float { animation: ap-float 3.8s ease-in-out infinite; }
-.taot-effect-pulse { animation: ap-pulse 2.4s ease-out infinite; }
+.taot-effect-pulse { animation: ap-pulse 2.4s ease-in-out infinite; }
 .taot-effect-glow { animation: ap-glow 2.8s ease-in-out infinite; }
 .taot-effect-glow-panel { box-shadow: 0 25px 50px -12px rgba(168, 85, 247, 0.35); }
 </style>

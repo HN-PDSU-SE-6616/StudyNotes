@@ -27,6 +27,10 @@ $PgDataVol = 'taot-kb_pg_data'      # 沿用原 compose 数据卷，避免重建
 $RedisDataVol = 'taot-kb_redis_data'
 $MysqlDataVol = 'taot_mysql_data'
 
+# 容器日志轮换策略：json-file 单文件 ≤20MB、保留最近 3 份（≤60MB/容器），
+# 防止长时间运行日志无限累计吃满磁盘（Docker 引擎不支持按“天数”轮换，用容量上限近似）。
+$LogOpts = @('--log-driver', 'json-file', '--log-opt', 'max-size=20m', '--log-opt', 'max-file=3')
+
 Write-Host '============================================' -ForegroundColor Cyan
 Write-Host '  Taot 基础服务独立容器 Ensure (infra.ps1)' -ForegroundColor Cyan
 Write-Host '============================================' -ForegroundColor Cyan
@@ -98,6 +102,7 @@ function Ensure-Postgres {
     Write-Host '[postgres] 创建独立容器 postgres（数据卷复用 taot-kb_pg_data）...' -ForegroundColor Yellow
     docker run -d --name postgres --network $Net `
         --label com.taot.infra=true `
+        $LogOpts `
         -v "${PgDataVol}:/var/lib/postgresql/data" `
         -p 5432:5432 `
         -e POSTGRES_USER=taot -e POSTGRES_PASSWORD=$Pw -e POSTGRES_DB=taot `
@@ -123,6 +128,7 @@ function Ensure-Redis {
     Write-Host '[redis] 创建独立容器 redis（数据卷复用 taot-kb_redis_data）...' -ForegroundColor Yellow
     docker run -d --name redis --network $Net `
         --label com.taot.infra=true `
+        $LogOpts `
         -v "${RedisDataVol}:/data" `
         -p 6379:6379 `
         --restart unless-stopped redis:7-alpine redis-server --appendonly yes | Out-Null
@@ -142,6 +148,7 @@ function Ensure-Qdrant {
     }
     Write-Host '[qdrant] 创建独立容器 qdrant ...' -ForegroundColor Yellow
     docker run -d --name qdrant --network $Net `
+        $LogOpts `
         -v qdrant_storage:/qdrant/storage `
         -p 6333:6333 -p 6334:6334 `
         --restart unless-stopped qdrant/qdrant:v1.13.0 | Out-Null
@@ -168,6 +175,7 @@ function Ensure-Mysql {
     Write-Host '[mysql] 创建独立容器 mysql（root/root@123, 数据卷 taot_mysql_data）...' -ForegroundColor Yellow
     docker run -d --name mysql --network $Net `
         --label com.taot.infra=true `
+        $LogOpts `
         -v "${MysqlDataVol}:/var/lib/mysql" `
         -p 3306:3306 `
         -e MYSQL_ROOT_PASSWORD='root@123' `

@@ -6,6 +6,7 @@ venv
 .venv/
 /frontend/node_modules/
 /frontend/dist/
+/frontend/.vite/
 uploads/
 data/
 static/uploads/
@@ -13,3 +14,16 @@ static/uploads/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# 工具/系统临时产物
+*.log
+.DS_Store
+Thumbs.db
+*_space.py
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+
+# Celery beat 本地状态（运行期生成，勿入库）
+celerybeat-schedule.*
+celerybeat.pid

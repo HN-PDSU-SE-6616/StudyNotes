@@ -26,7 +26,7 @@ from typing import Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.models.file import FileMetadata, FileStatus
+from app.models.file import FileCategory, FileMetadata, FileStatus
 from app.models.note import Note, NoteBlock
 from app.models.project import Project
 from app.models.user import User
@@ -37,6 +37,7 @@ from app.services.storage import get_storage
 logger = logging.getLogger(__name__)
 
 RESOURCE_DIRS = {"css", "media", "fonts", "js", "image", "img", "images", "assets"}
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
 TEXT_DOC_EXTS = {".md", ".markdown", ".html", ".htm"}
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)#]+)(#[^)]*)?\)")
 
@@ -174,16 +175,20 @@ class _TreeImporter:
                 storage = get_storage()
                 filename = os.path.basename(rel)
                 ext = os.path.splitext(filename)[1].lower()
+                # 分类：图片→note_image；其余静态资源→note_asset；保留原始相对路径
+                category = (FileCategory.NOTE_IMAGE.value if ext in _IMAGE_EXTS
+                            else FileCategory.NOTE_ASSET.value)
                 meta = FileMetadata(
                     organization_id=self.project.organization_id,
                     project_id=self.project.id, owner_id=self.user.id,
-                    original_name=filename, storage_key="", size=len(data),
-                    purpose="asset", status=FileStatus.COMPLETED.value,
+                    original_name=filename, source_path=rel, storage_key="",
+                    size=len(data), purpose="asset", category=category,
+                    status=FileStatus.COMPLETED.value,
                     parser_type="asset", mime_type="application/octet-stream",
                 )
                 self.session.add(meta)
                 await self.session.flush()
-                key = storage.build_key(self.project.organization_id, meta.id, ext)
+                key = storage.build_key(self.user.id, category, meta.id, ext)
                 await storage.put(key, data)
                 meta.storage_key = key
                 await self.session.commit()

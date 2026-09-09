@@ -9,6 +9,8 @@
 - get_system_info  服务端与客户端系统参数（CPU/GPU/内存/浏览器）
 - fetch_web_page   httpx 抓取简单网页 → BeautifulSoup4 提取正文文本
 - web_search       DuckDuckGo html 端网页搜索（标题/链接/摘要）
+- web_research     联网研究工作流：拆词→多源搜索→抓正文→要点汇总
+- search_knowledge_base  知识库（笔记）向量检索（需登录 + Embedding 配置）
 """
 import json
 import logging
@@ -20,6 +22,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 import httpx
+
+from app.core.metrics import record_tool_call
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +234,31 @@ def _html_to_text(html: str, url: str = "", limit: int = 3000) -> str:
 
 
 # ---------- 5. 网页搜索 ----------
+def _ddg_results(query: str, max_results: int = 5) -> list[dict]:
+    """DuckDuckGo html 端搜索，返回 [{title,url,snippet}]（供 search/web_research 复用）"""
+    resp = _http_get("https://html.duckduckgo.com/html/", {"q": query, "kl": "cn-zh"})
+    resp.raise_for_status()
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(resp.text, "html.parser")
+    items: list[dict] = []
+    for result in soup.select(".result")[: min(int(max_results or 5), 8)]:
+        a = result.select_one("a.result__a")
+        snip = result.select_one(".result__snippet")
+        if not a:
+            continue
+        href = a.get("href", "")
+        m = re.search(r"uddg=([^&]+)", href)
+        if m:
+            from urllib.parse import unquote
+            href = unquote(m.group(1))
+        items.append({
+            "title": a.get_text(strip=True),
+            "url": href,
+            "snippet": snip.get_text(" ", strip=True) if snip else "",
+        })
+    return items
+
+
 @register_tool(
     "web_search",
     "联网搜索网页，返回标题/链接/摘要列表（用 fetch_web_page 可进一步抓取正文）",
@@ -244,32 +273,84 @@ def _search(ctx: dict, query: str = "", max_results: int = 5) -> str:
     if not query:
         return "缺少参数 query。"
     try:
-        resp = _http_get("https://html.duckduckgo.com/html/", {"q": query, "kl": "cn-zh"})
-        resp.raise_for_status()
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(resp.text, "html.parser")
-        items = []
-        for result in soup.select(".result")[: min(int(max_results or 5), 8)]:
-            a = result.select_one("a.result__a")
-            snip = result.select_one(".result__snippet")
-            if not a:
-                continue
-            href = a.get("href", "")
-            m = re.search(r"uddg=([^&]+)", href)
-            if m:
-                from urllib.parse import unquote
-                href = unquote(m.group(1))
-            items.append({
-                "title": a.get_text(strip=True),
-                "url": href,
-                "snippet": snip.get_text(" ", strip=True) if snip else "",
-            })
+        items = _ddg_results(query, max_results)
         if not items:
             return "未搜索到结果，可换个关键词或直接提供 URL 用 fetch_web_page。"
         return json.dumps(items, ensure_ascii=False)[:4000]
     except Exception as exc:  # noqa: BLE001
         logger.warning("web_search 失败: %s", exc)
         return f"搜索服务暂时不可用（{type(exc).__name__}）。"
+
+
+# ---------- 6. 联网研究工作流（关键词→搜索→抓取→要点） ----------
+@register_tool(
+    "web_research",
+    "联网研究工作流：自动把问题拆成检索词→搜索多个来源→抓取相关文档正文→"
+    "汇总各来源要点与链接。适合需要联网取证/对比/了解最新现状/查官方文档等场景，"
+    "一个工具调用即可完成多步检索，避免多次来回。",
+    {"type": "object",
+     "properties": {
+         "question": {"type": "string", "description": "要调研的问题/主题，如：Python 3.13 新特性"},
+         "max_results": {"type": "integer", "description": "每轮搜索条数，默认 5，最大 8"},
+         "max_sources": {"type": "integer", "description": "最终抓取正文的来源数，默认 3，最大 5"},
+         "per_source_chars": {"type": "integer", "description": "每个来源保留正文字符数，默认 1800，最大 3000"}},
+     "required": ["question"]},
+)
+def _web_research(ctx: dict, question: str = "", max_results: int = 5,
+                  max_sources: int = 3, per_source_chars: int = 1800) -> str:
+    """拆词→多源搜索→相关度排序→抓正文→要点汇总（无需二次 LLM）"""
+    question = (question or "").strip()
+    if not question:
+        return "缺少参数 question。"
+    try:
+        # 1) 检索词：主问题 + “对比/和/与”切出的子主题（去重，最多 3 组）
+        queries = [question]
+        for seg in re.split(r"[和与及、vs\.]|对比|比较", question):
+            seg = seg.strip(" ?？，,")
+            if 4 <= len(seg) <= 60 and seg and seg not in queries:
+                queries.append(seg)
+            if len(queries) >= 3:
+                break
+        # 2) 各检索词搜索并去重合并
+        items: list[dict] = []
+        seen: set[str] = set()
+        for q in queries:
+            for it in _ddg_results(q, max_results=int(max_results or 5)):
+                url = it.get("url", "")
+                if url and url not in seen:
+                    seen.add(url)
+                    items.append(it)
+        if not items:
+            return "联网搜索未找到相关结果，请换一种问法或直接提供 URL 用 fetch_web_page。"
+        # 3) 相关度粗排：标题/摘要命中问题关键词多的优先
+        terms = [t for t in re.split(r"\W+", question.lower()) if len(t) >= 2]
+        def _score(it: dict) -> int:
+            blob = f"{it.get('title', '')} {it.get('snippet', '')}".lower()
+            return sum(1 for t in terms if t in blob)
+        items.sort(key=lambda it: (_score(it), len(it.get("title", ""))), reverse=True)
+        items = items[: min(int(max_sources or 3), 5)]
+        # 4) 逐条抓取正文并截断
+        parts: list[str] = []
+        for i, it in enumerate(items, start=1):
+            title = it.get("title", "") or it.get("url", "")
+            body = ""
+            url = it.get("url", "")
+            if re.match(r"^https?://", url, re.I):
+                try:
+                    resp = _http_get(url, timeout=12.0)
+                    resp.raise_for_status()
+                    body = _html_to_text(resp.text, url=url,
+                                         limit=int(per_source_chars or 1800))
+                except Exception as exc:  # noqa: BLE001
+                    body = f"（抓取失败：{type(exc).__name__}）"
+            parts.append(
+                f"[{i}] {title}\n    链接：{url}\n    摘要：{it.get('snippet', '') or '无'}\n"
+                f"    正文要点：{body[: int(per_source_chars or 1800)]}"
+            )
+        return "\n\n".join(parts)[:6000]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("web_research 失败: %s", exc)
+        return f"联网研究工作流暂时不可用（{type(exc).__name__}）。"
 
 
 # ---------- 对外接口 ----------
@@ -289,15 +370,19 @@ def execute_tool(name: str, arguments: dict, ctx: Optional[dict] = None) -> str:
     """执行工具并返回给 LLM 的字符串结果（异常安全，错误也以文本返回）"""
     tool = REGISTRY.get(name)
     if tool is None:
+        record_tool_call(name, False)
         return f"未知工具：{name}。可用工具：{', '.join(REGISTRY)}"
     try:
         if isinstance(arguments, str):
             arguments = json.loads(arguments or "{}")
         if not isinstance(arguments, dict):
             arguments = {}
-        return str(tool.handler(ctx or {}, **arguments))[:4000]
+        result = str(tool.handler(ctx or {}, **arguments))[:4000]
+        record_tool_call(name, True)
+        return result
     except Exception as exc:  # noqa: BLE001
         logger.warning("工具 %s 执行失败: %s", name, exc, exc_info=True)
+        record_tool_call(name, False)
         return f"工具 {name} 执行出错：{type(exc).__name__}: {exc}"
 
 

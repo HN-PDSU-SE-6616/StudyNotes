@@ -144,14 +144,16 @@ export interface RecommendationItem {
 
 export interface FileMeta {
   id: string
-  organization_id: string
+  organization_id: string | null
   project_id: string | null
   owner_id: number
   original_name: string
+  source_path: string | null
   storage_key: string
   mime_type: string
   size: number
   purpose: string
+  category: string | null
   status: string
   parser_type: string | null
   chunk_count: number

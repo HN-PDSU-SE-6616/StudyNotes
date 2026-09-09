@@ -38,6 +38,12 @@ services:
       - ./storage:/app/storage
       - ./static:/app/static
       - hf_cache:/root/.cache/huggingface
+    logging:
+      # json-file 轮换：单文件 ≤20MB、保留 3 份，避免日志无限增长
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     restart: unless-stopped
 
   # Celery Worker：文件解析 + 向量索引
@@ -70,6 +76,11 @@ services:
       - ./storage:/app/storage
       - ./static:/app/static
       - hf_cache:/root/.cache/huggingface
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     restart: unless-stopped
 
   # Celery Beat：推荐等定时任务
@@ -94,6 +105,11 @@ services:
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
       - STORAGE_ROOT=/app/storage
       - HF_HOME=/root/.cache/huggingface
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     restart: unless-stopped
 
 networks:

@@ -71,7 +71,7 @@
 
     <!-- ===== Content Area ===== -->
     <div class="flex-1 flex overflow-hidden transition-all duration-300" :style="contentAreaStyle">
-      <div class="flex-1 overflow-y-auto" ref="contentAreaRef">
+      <div class="flex-1 overflow-y-auto overflow-x-hidden" ref="contentAreaRef">
         <!-- Empty state -->
         <div v-if="!page" class="flex items-center justify-center h-full text-slate-400">
           <div class="text-center">
@@ -87,7 +87,7 @@
         </div>
 
         <!-- Page Content -->
-        <div v-else :class="['mx-auto px-8 py-8', pageSettings.adaptiveWidth ? 'max-w-full' : 'max-w-3xl', pageSettings.smallFont ? 'text-sm' : '']">
+        <div v-else :class="['mx-auto px-4 md:px-8 py-8 w-full min-w-0 max-w-full break-words', pageSettings.adaptiveWidth ? 'max-w-none' : 'max-w-3xl', pageSettings.smallFont ? 'text-sm' : '']">
 
           <!-- ===== TITLE SECTION ===== -->
           <div class="page-title-section mb-8">
@@ -258,46 +258,69 @@
         </div>
       </div>
 
-      <!-- ===== TOC Sidebar ===== -->
+      <!-- ===== TOC Sidebar（可收起/可拖宽） ===== -->
       <aside
         v-if="pageSettings.showToc && page && headingTree.length > 0"
-        class="shrink-0 overflow-y-auto border-l border-slate-100 bg-white relative"
-        :style="{ width: tocWidth + 'px' }"
+        class="shrink-0 overflow-hidden border-l border-slate-100 bg-white relative toc-aside"
+        :style="{ width: (tocCollapsed ? 28 : tocWidth) + 'px', transition: 'width .2s ease' }"
       >
+        <!-- 展开/收起按钮 -->
+        <button
+          class="toc-toggle-btn"
+          :title="tocCollapsed ? '展开目录' : '收起目录'"
+          @click="onToggleTocCollapsed"
+        >
+          <svg class="w-3.5 h-3.5" :class="{ 'rotate-180': tocCollapsed }" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7" /></svg>
+        </button>
+
+        <!-- 拖拽调宽（收起时禁用） -->
         <div
+          v-if="!tocCollapsed"
           class="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-brand-400/30 transition-colors group/resize z-10"
           @mousedown="onTocResizeStart"
         >
           <div class="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-8 bg-slate-200 group-hover/resize:bg-brand-400 transition-colors rounded" />
         </div>
-        <div class="px-3 py-4">
-          <h4 class="text-xs font-semibold text-slate-400 mb-3 px-1">TOC</h4>
-          <nav class="space-y-0">
-            <div v-for="(node, idx) in visibleHeadings" :key="node.blockId">
-              <div
-                class="flex items-center group/toc rounded hover:bg-slate-50 transition-colors cursor-pointer"
-                :style="{ paddingLeft: `${(node.level - minHeadingLevel) * 12 + 4}px` }"
-                @click="scrollToBlock(node.blockId)"
-              >
-                <button
-                  v-if="node.children.length > 0"
-                  class="w-5 h-5 shrink-0 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors rounded"
-                  @click.stop="toggleCollapse(node.blockId)"
+
+        <template v-if="!tocCollapsed">
+          <div class="px-3 py-4">
+            <h4 class="text-xs font-semibold text-slate-400 mb-3 px-1">目录</h4>
+            <nav class="space-y-0">
+              <div v-for="(node, idx) in visibleHeadings" :key="node.blockId">
+                <div
+                  class="flex items-center group/toc rounded hover:bg-slate-50 transition-colors cursor-pointer"
+                  :style="{ paddingLeft: `${(node.level - minHeadingLevel) * 12 + 4}px` }"
+                  @click="scrollToBlock(node.blockId)"
                 >
-                  <svg class="w-3 h-3 transition-transform" :class="collapsedMap[node.blockId] ? '' : 'rotate-90'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" /></svg>
-                </button>
-                <span v-else class="w-5 h-5 shrink-0" />
-                <span
-                  class="text-sm py-1 truncate flex-1"
-                  :class="node.level === minHeadingLevel ? 'font-semibold text-slate-700' : 'text-slate-500 hover:text-slate-700'"
-                  :title="node.text"
-                >
-                  <span v-if="pageSettings.autoNumbering" class="text-slate-400 mr-1 font-mono text-[0.8em]">{{ node.number }}</span>
-                  {{ node.text }}
-                </span>
+                  <button
+                    v-if="node.children.length > 0"
+                    class="w-5 h-5 shrink-0 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors rounded"
+                    @click.stop="toggleCollapse(node.blockId)"
+                  >
+                    <svg class="w-3 h-3 transition-transform" :class="collapsedMap[node.blockId] ? '' : 'rotate-90'" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" /></svg>
+                  </button>
+                  <span v-else class="w-5 h-5 shrink-0" />
+                  <span
+                    class="text-sm py-1 truncate flex-1"
+                    :class="node.level === minHeadingLevel ? 'font-semibold text-slate-700' : 'text-slate-500 hover:text-slate-700'"
+                    :title="node.text"
+                  >
+                    <span v-if="pageSettings.autoNumbering" class="text-slate-400 mr-1 font-mono text-[0.8em]">{{ node.number }}</span>
+                    {{ node.text }}
+                  </span>
+                </div>
               </div>
-            </div>
-          </nav>
+            </nav>
+          </div>
+        </template>
+        <!-- 收起态：竖排文字提示 -->
+        <div v-else class="absolute inset-y-0 right-0 w-7 flex items-center">
+          <span
+            class="w-7 flex items-center justify-center text-slate-400 font-medium tracking-widest cursor-pointer select-none"
+            style="writing-mode: vertical-rl"
+            title="展开目录"
+            @click="onToggleTocCollapsed"
+          >目录</span>
         </div>
       </aside>
     </div>
@@ -643,9 +666,20 @@ const contentAreaStyle = computed(() => {
   return {}
 })
 
-const tocWidth = ref(224)
-const MIN_TOC_WIDTH = 150
+const tocWidth = ref(180)
+const MIN_TOC_WIDTH = 96
 const MAX_TOC_WIDTH_RATIO = 0.4
+
+// 目录展开/收起（记忆状态）
+const TOC_COLLAPSED_KEY = 'taot.toc.collapsed'
+function readTocCollapsed(): boolean {
+  try { return localStorage.getItem(TOC_COLLAPSED_KEY) === '1' } catch { return false }
+}
+const tocCollapsed = ref(readTocCollapsed())
+function onToggleTocCollapsed() {
+  tocCollapsed.value = !tocCollapsed.value
+  try { localStorage.setItem(TOC_COLLAPSED_KEY, tocCollapsed.value ? '1' : '0') } catch { /* ignore */ }
+}
 
 function onTocResizeStart(e: MouseEvent) {
   const startX = e.clientX
@@ -1134,5 +1168,34 @@ onUnmounted(() => {
 
 .sub-menu-right {
   @apply absolute left-full top-0 w-40 bg-white rounded-xl shadow-lg border border-slate-200 py-1 ml-1 max-h-48 overflow-y-auto z-50;
+}
+
+/* ===== TOC 侧边栏交互 ===== */
+.toc-toggle-btn {
+  position: absolute;
+  top: 12px;
+  right: 10px;
+  z-index: 20;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: #94a3b8;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.toc-toggle-btn:hover {
+  background: #f1f5f9;
+  color: #64748b;
+}
+.toc-aside {
+  overflow-y: auto;
+}
+/* 收起态内容区不被 TOC 挤占；窄屏下目录宽度上限约视口 70% */
+@media (max-width: 767px) {
+  .toc-aside {
+    max-width: 78vw;
+  }
 }
 </style>

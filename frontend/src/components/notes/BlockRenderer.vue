@@ -403,13 +403,13 @@
 
       <!-- 图片 -->
       <div v-else-if="block.type === 'image'" class="my-2">
-        <img v-if="imageUrl" :src="imageUrl" :alt="imageAlt" class="max-w-full rounded-xl cursor-pointer" @click="startEdit" />
+        <img v-if="imageUrl" :src="mediaUrl(imageUrl)" :alt="imageAlt" class="max-w-full rounded-xl cursor-pointer" @click="startEdit" />
         <div
           v-else-if="!editing"
           class="px-4 py-3 bg-slate-50 rounded-xl text-sm text-slate-400 text-center cursor-pointer hover:bg-slate-100"
           @click="startEdit"
         >🖼️ 点击添加图片URL</div>
-        <div v-else class="flex gap-2">
+        <div v-else class="flex gap-2 items-center">
           <input
             ref="inputRef"
             v-model="editText"
@@ -420,6 +420,13 @@
             @paste="onPaste"
             @blur="saveEdit"
           />
+          <button
+            class="px-3 py-2 text-sm rounded-xl bg-brand-50 text-brand-600 border border-brand-200 hover:bg-brand-100 whitespace-nowrap"
+            title="上传本地图片（上传后自动写入块内容）"
+            :disabled="imgUploading"
+            @mousedown.prevent="pickImageFile"
+          >{{ imgUploading ? '上传中…' : '🖼 上传' }}</button>
+          <input ref="imgFileInput" type="file" accept="image/*" class="hidden" @change="onImageFileChanged" />
         </div>
       </div>
 
@@ -515,6 +522,7 @@ import { ref, computed, nextTick, onMounted, watch, type Ref } from 'vue'
 import type { Block, PageTreeNode, TableBlockContent } from '@/types'
 import { filesApi } from '@/api/files'
 import { useOrgStore } from '@/stores/org'
+import { mediaUrl } from '@/utils/media'
 import hljs from 'highlight.js'
 import python from 'highlight.js/lib/languages/python'
 import bash from 'highlight.js/lib/languages/bash'
@@ -1150,7 +1158,7 @@ async function handleImagePaste(blob: Blob) {
     const file = new File([blob], `paste-${Date.now()}.png`, { type: blob.type || 'image/png' })
     const pid = useOrgStore().activeProject?.id
     if (!pid) return
-    const { data } = await filesApi.upload(pid, file, 'asset')
+    const { data } = await filesApi.upload(pid, file, 'asset', 'note_image')
     const url = filesApi.contentUrl(data.id)
     if (url) {
       // 如果当前 Block 是空段落，转换为图片 Block
@@ -1168,6 +1176,36 @@ async function handleImagePaste(blob: Blob) {
     }
   } catch {
     // 上传失败，静默忽略
+  }
+}
+
+// ===== 图片块本地文件上传（上传后自动回写块 content.url） =====
+const imgFileInput = ref<HTMLInputElement>()
+const imgUploading = ref(false)
+
+function pickImageFile() {
+  imgFileInput.value?.click()
+}
+
+async function onImageFileChanged(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const pid = useOrgStore().activeProject?.id
+  if (!pid) return
+  imgUploading.value = true
+  try {
+    const { data } = await filesApi.upload(pid, file, 'asset', 'note_image')
+    const url = filesApi.contentUrl(data.id)
+    if (url) {
+      editing.value = false
+      emit('save', { ...props.block.content, url, alt: file.name || '' })
+    }
+  } catch {
+    // 上传失败，保持编辑态供重试
+  } finally {
+    imgUploading.value = false
   }
 }
 

@@ -26,6 +26,7 @@ export interface AssistantSettings {
   effectType: 'float' | 'pulse' | 'glow' | 'none'
   temperature: number
   toolsEnabled: boolean
+  deepPlan: boolean            // 复杂问题自动“任务拆解”计划层（mode=auto）
   system: string
   customCss: string
   customJs: string
@@ -67,6 +68,7 @@ export const DEFAULT_SETTINGS: AssistantSettings = {
   effectType: 'float',
   temperature: 0.7,
   toolsEnabled: true,
+  deepPlan: true,
   system: '你是一位乐于助人的 AI 助手。回答请简洁、准确，需要实时/外部信息时使用工具。',
   customCss: '',
   customJs: '',

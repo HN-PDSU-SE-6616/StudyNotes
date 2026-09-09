@@ -1,0 +1,18 @@
+# Taot 知识库 — Prometheus 抓取配置
+# 本地后端跑在宿主机：host.docker.internal:8000
+# 若后端在容器内运行，把 taot-backend 目标的地址改为 taot-backend:8000
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: taot-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+        labels:
+          service: taot-backend
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

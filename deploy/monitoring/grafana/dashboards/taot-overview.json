@@ -1,0 +1,95 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "请求 QPS（按路由）",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "stacking": { "mode": "none" }, "showPoints": "never" } },
+        "overrides": []
+      },
+      "targets": [
+        { "expr": "sum by (route, status) (rate(taot_http_requests_total[1m]))", "legendFormat": "{{route}} {{status}}", "refId": "A" }
+      ]
+    },
+    {
+      "title": "P95 / P99 响应耗时（秒）",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "stacking": { "mode": "none" }, "showPoints": "never" } },
+        "overrides": []
+      },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(taot_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "A" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(taot_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p99", "refId": "B" }
+      ]
+    },
+    {
+      "title": "5xx 错误占比",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "max": 1, "min": 0, "custom": { "drawStyle": "bars", "fillOpacity": 40, "lineWidth": 1, "stacking": { "mode": "none" }, "showPoints": "never" } },
+        "overrides": []
+      },
+      "targets": [
+        { "expr": "sum(rate(taot_http_requests_total{status=~\"5..\"}[1m])) / clamp_min(sum(rate(taot_http_requests_total[1m])), 1e-6)", "legendFormat": "5xx 占比", "refId": "A" }
+      ]
+    },
+    {
+      "title": "并发处理中请求",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 4, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2, "stacking": { "mode": "none" }, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(taot_http_inflight_requests)", "legendFormat": "inflight", "refId": "A" }
+      ]
+    },
+    {
+      "title": "Agent 工具调用（成功/失败）",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "bars", "fillOpacity": 50, "lineWidth": 1, "stacking": { "mode": "normal" }, "showPoints": "never" } },
+        "overrides": []
+      },
+      "targets": [
+        { "expr": "sum by (tool, ok) (rate(taot_agent_tool_calls_total[5m]))", "legendFormat": "{{tool}} ok={{ok}}", "refId": "A" }
+      ]
+    },
+    {
+      "title": "服务存活",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "mappings": [ { "type": "value", "options": { "1": { "text": "UP", "color": "green" }, "0": { "text": "DOWN", "color": "red" } } } ], "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "targets": [
+        { "expr": "up{job=\"taot-backend\"}", "legendFormat": "taot-backend", "refId": "A" },
+        { "expr": "up{job=\"prometheus\"}", "legendFormat": "prometheus", "refId": "B" }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["taot", "apm"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Taot 后端监控",
+  "uid": "taot-overview",
+  "version": 1,
+  "weekStart": ""
+}

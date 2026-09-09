@@ -1,6 +1,8 @@
 """对象存储抽象层：StorageProvider 接口 + LocalFS 实现（预留 S3/MinIO）
 
-对象路径规则：storage_root/{org_id}/{yyyy}/{mm}/{file_id}{ext}
+对象路径规则（新文件，按 用户→类型 分类存储）：
+    storage_root/{owner_id}/{category}/{yyyy}/{mm}/{file_id}{ext}
+存量文件仍按旧 storage_key 读取（organization/{yyyy}/{mm}/...），不做物理迁移。
 访问一律通过 /api/v1/files/{file_id}/content 带权限校验，不暴露物理路径。
 """
 import abc
@@ -37,8 +39,8 @@ class StorageProvider(abc.ABC):
         """对象是否存在"""
 
     @abc.abstractmethod
-    def build_key(self, org_id: str, file_id: str, ext: str = "") -> str:
-        """构造对象 key：{org_id}/{yyyy}/{mm}/{file_id}{ext}"""
+    def build_key(self, owner_id: int, category: str, file_id: str, ext: str = "") -> str:
+        """构造对象 key：{owner_id}/{category}/{yyyy}/{mm}/{file_id}{ext}"""
 
 
 class LocalStorageProvider(StorageProvider):
@@ -84,7 +86,7 @@ class LocalStorageProvider(StorageProvider):
     async def delete(self, key: str) -> None:
         path = self._resolve(key)
         if path.exists():
-            await self._delete_sync(path)
+            self._delete_sync(path)
 
     @staticmethod
     def _delete_sync(path: Path) -> None:
@@ -96,9 +98,9 @@ class LocalStorageProvider(StorageProvider):
     async def exists(self, key: str) -> bool:
         return self._resolve(key).exists()
 
-    def build_key(self, org_id: str, file_id: str, ext: str = "") -> str:
+    def build_key(self, owner_id: int, category: str, file_id: str, ext: str = "") -> str:
         now = datetime.now()
-        return f"{org_id}/{now:%Y}/{now:%m}/{file_id}{ext}"
+        return f"{owner_id}/{category}/{now:%Y}/{now:%m}/{file_id}{ext}"
 
 
 class S3StorageProvider(LocalStorageProvider):

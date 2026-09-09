@@ -1,18 +1,22 @@
-"""AI Agent：会话上下文 + 相似问题热缓存 + 工具调用循环
+"""AI Agent：会话上下文 + 相似问题热缓存（上下文感知）+ 工具调用循环
 
 - 会话：按 (user_id, session_id) 在 Redis 存最近对话（上限 24 条，TTL 6h），
   可整体清空（assistant/context/clear）。
-- 热缓存：把「问题→答案」按用户缓存（上限 100 条，TTL 24h）；精确或高相似
-  （字符 bigram Dice ≥0.88 且长度 ≥6）重复/相似问题直接复用，减少 LLM 调用。
-- 工具：接入 app.services.tools.REGISTRY 的 function calling 循环（≤4 轮），
-  模型不支持 tools 时自动降级为普通对话。
+- 热缓存：把「问题→答案」按用户缓存（上限 100 条，TTL 24h）；命中时带上下文
+  指纹（会话最近消息 + 项目）分档处理：
+  · 无会话或指纹一致 → 直接回放；
+  · 会话语境不同 → 不硬回放，把缓存答案作为“参考提示”交给 LLM 结合语境微调。
+- 工具：接入 app.services.tools.REGISTRY 的 function calling 循环（≤8 轮），
+  同轮多个工具并行执行；模型不支持 tools 时自动降级为普通对话。
 
 Redis 不可用时全部优雅降级（无会话/无缓存，仅影响记忆与提速）。
 """
+import hashlib
 import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
 from app.core.config import settings
@@ -24,8 +28,9 @@ CTX_TTL = 6 * 3600
 CACHE_TTL = 24 * 3600
 MAX_HISTORY = 24        # 会话最多保留消息条数
 MAX_CACHE = 100         # 每用户缓存问题数（超出淘汰最旧）
-MAX_TOOL_ROUNDS = 4     # 单次对话最多工具轮次
+MAX_TOOL_ROUNDS = 8     # 单次对话最多工具轮次
 CACHE_SIM_THRESHOLD = 0.88
+CTX_FINGERPRINT_MSGS = 4   # 上下文指纹取最近 N 条消息
 
 _redis: Any = None
 
@@ -90,31 +95,55 @@ def _is_similar(a: str, b: str) -> bool:
     return _dice(na, nb) >= 0.74 or _lcs_ratio(na, nb) >= 0.72
 
 
-# ---------- 热缓存 ----------
-async def cache_get(uid: str, question: str) -> Optional[str]:
+# ---------- 热缓存（上下文感知） ----------
+def _ctx_fingerprint(messages: list[dict], project_id: str = "") -> str:
+    """会话上下文指纹：最近 N 条消息内容（归一化截断）+ 限定项目"""
+    tail = [m for m in (messages or []) if isinstance(m, dict)
+            and m.get("role") in ("user", "assistant")
+            and isinstance(m.get("content"), str) and m.get("content")]
+    raw = "\x1f".join(_norm(str(m["content"]))[-80:] for m in tail[-CTX_FINGERPRINT_MSGS:])
+    raw += f"|{project_id or ''}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
+async def cache_lookup(uid: str, question: str,
+                       ctx_sig: Optional[str] = None) -> Optional[tuple[str, bool]]:
+    """相似问题缓存查找。
+
+    返回 (answer, full_hit)：full_hit=True 可直接回放；False 表示问题相似但会话
+    语境不同（或未提供指纹），答案仅供 LLM 参考，需结合当前语境重新生成。
+    """
     try:
         raw = await _get_redis().get(f"taot:asst:cache:{uid}")
         if not raw:
             return None
         items = json.loads(raw) or []
         for it in items:
-            if _is_similar(it.get("q", ""), question):
-                it["ts"] = time.time()
-                await _get_redis().setex(
-                    f"taot:asst:cache:{uid}", CACHE_TTL, json.dumps(items, ensure_ascii=False))
-                return it.get("a") or None
+            if not _is_similar(it.get("q", ""), question):
+                continue
+            it["ts"] = time.time()
+            await _get_redis().setex(
+                f"taot:asst:cache:{uid}", CACHE_TTL, json.dumps(items, ensure_ascii=False))
+            answer = it.get("a") or None
+            if answer is None:
+                return None
+            if ctx_sig is None:
+                return answer, True
+            # 会话有历史：指纹一致才直回，否则降级为参考
+            return answer, (it.get("ctx") or "") == ctx_sig
     except Exception:  # noqa: BLE001 Redis 不可用 → 直接 miss
-        logger.debug("cache_get 不可用，按 miss 处理")
+        logger.debug("cache_lookup 不可用，按 miss 处理")
     return None
 
 
-async def cache_put(uid: str, question: str, answer: str) -> None:
+async def cache_put(uid: str, question: str, answer: str,
+                    ctx_sig: Optional[str] = None) -> None:
     try:
         key = f"taot:asst:cache:{uid}"
         raw = await _get_redis().get(key)
         items = json.loads(raw) if raw else []
         items = [it for it in items if not _is_similar(it.get("q", ""), question)]
-        items.append({"q": question, "a": answer, "ts": time.time()})
+        items.append({"q": question, "a": answer, "ctx": ctx_sig or "", "ts": time.time()})
         items = items[-MAX_CACHE:]
         await _get_redis().setex(key, CACHE_TTL, json.dumps(items, ensure_ascii=False))
     except Exception:  # noqa: BLE001
@@ -168,11 +197,12 @@ def run_agent(
     tools_enabled: bool = True,
     client_context: Optional[dict] = None,
     rag_context: Optional[dict] = None,
+    hint: Optional[str] = None,
 ) -> tuple[str, str, bool]:
     """执行带工具循环的对话，返回 (reply, model, used_tools)。
 
-    工具开启时优先调用 OpenAI 兼容 function calling；若服务端不支持 tools，
-    自动去掉 tools 重试一次（模型不支持不会阻断对话）。
+    hint：缓存/前置任务给出的“参考提示”文本（≤700 字）。工具开启时优先调用
+    OpenAI 兼容 function calling；若服务端不支持 tools，自动去掉 tools 重试一次。
     """
     from openai import OpenAI
 
@@ -181,6 +211,20 @@ def run_agent(
     cfg_model = model or settings.llm_model
     if not cfg_key:
         raise RuntimeError("未配置 LLM API Key：请在 .env 配置 LLM_API_KEY（模型配置统一由 .env 管理）")
+
+    if hint:
+        hint_text = str(hint).strip()
+        if hint_text:
+            if len(hint_text) > 700:
+                hint_text = hint_text[:700] + "…"
+            messages = [{
+                "role": "system",
+                "content": (
+                    "[参考] 曾回答过相近问题（缓存，可能语境不同）：\n" + hint_text +
+                    "\n请先判断该参考在当前语境下是否适用：适用则可精简复用，不适用请忽略"
+                    "并基于本次上下文重新回答。"
+                ),
+            }] + messages
 
     client = OpenAI(api_key=cfg_key, base_url=cfg_base or None, timeout=120.0)
     use_tools = tools_enabled
@@ -192,7 +236,9 @@ def run_agent(
         if use_tools:
             note = ("你可以调用工具获取实时/外部数据，可用工具：" +
                     "、".join(t.name for t in tools.REGISTRY.values()) +
-                    "。需要实时信息时先调用工具，基于工具结果回答，不要编造。")
+                    "。需要实时信息时先调用工具，基于工具结果回答，不要编造。" +
+                    "复杂问题建议先规划：如问题需要联网取证/对比/最新资料，用 web_research "
+                    "一步完成多源搜索与抓取；涉及知识库内容时先调 search_knowledge_base。")
             if client_context:
                 note += f"；用户浏览器端信息：{json.dumps(client_context, ensure_ascii=False)}"
             working = [{"role": "system", "content": note}] + working
@@ -237,8 +283,12 @@ def run_agent(
                 "client_context": client_context or {},
                 "kb": rag_context or {"enabled": False},
             }
-            for tc in tool_calls:
-                result = tools.execute_tool(tc.function.name, tc.function.arguments, ctx)
+            # 同一轮多个工具并行执行（网络 IO 型工具互不依赖）
+            def _run(tc) -> str:
+                return tools.execute_tool(tc.function.name, tc.function.arguments, ctx)
+            with ThreadPoolExecutor(max_workers=min(4, len(tool_calls))) as pool:
+                results = list(pool.map(_run, list(tool_calls)))
+            for tc, result in zip(tool_calls, results):
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,

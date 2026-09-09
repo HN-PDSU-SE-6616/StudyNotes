@@ -1,4 +1,4 @@
-"""AI 助手对话代理（Agent：工具 + 会话上下文 + 相似问题热缓存）
+"""AI 助手对话代理（Agent：计划层 + 工具 + 会话上下文 + 上下文感知热缓存）
 
 - POST /assistant/chat           整段返回（自由对话 / 知识库问答外的通用对话）
 - POST /assistant/chat/stream    SSE 流式（data: {json} 行，末尾 data: [DONE]）
@@ -11,7 +11,9 @@ base_url/api_key/model 覆盖（保留字段仅为兼容，忽略不生效）。
 - system              系统提示（可空）
 - session_id          可选：开启服务端会话记忆（此时请只传本轮问题）
 - tools               bool，默认 true：启用工具函数（天气/IP/系统/网页等）
+- mode                auto|simple|plan：auto 启发式决定是否进入“任务拆解”计划层
 - client_context      浏览器端环境信息（供 get_system_info scope=client）
+- project_id          限定知识库检索项目
 """
 import asyncio
 import json
@@ -23,11 +25,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
 
+from app.core.config import settings
 from app.core.deps import get_optional_user
 from app.core.permissions import PermissionChecker
 from app.database import get_session
 from app.models.user import User
-from app.services import agent
+from app.services import agent, agent_flow
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ class ChatRequest(SQLModel):
     system: Optional[str] = None
     session_id: Optional[str] = None
     tools: bool = True
+    mode: str = "auto"  # auto | simple | plan
     client_context: Optional[dict] = None
     project_id: Optional[str] = None
 
@@ -60,6 +64,7 @@ class ChatResponse(SQLModel):
     model: str
     cached: bool = False
     used_tools: bool = False
+    steps: Optional[list[dict]] = None  # 计划层步骤记录（含各子任务结论）
 
 
 def _uid(user: Optional[User]) -> str:
@@ -104,7 +109,33 @@ def _stream_chunks(text: str):
         yield text[i:i + STREAM_CHUNK]
 
 
-@router.post("/chat", response_model=ChatResponse, summary="AI 对话（工具+缓存+会话）")
+def _exec_reply(
+    msgs: list[dict], body: ChatRequest, question: str, hint: Optional[str],
+    rag_ctx: Optional[dict],
+) -> tuple[str, Optional[list[dict]]]:
+    """在线程池执行：普通对话或（命中计划层时）按计划拆解并综合"""
+    if agent_flow.should_plan(question, body.tools, body.mode):
+        steps = agent_flow.build_plan(question)
+        reply, records = agent_flow.run_planned(
+            msgs, question, steps,
+            temperature=body.temperature,
+            tools_enabled=body.tools,
+            client_context=body.client_context,
+            rag_context=rag_ctx,
+        )
+        return reply or "（空回复）", records
+    reply, _model, _used_tools = agent.run_agent(
+        msgs,
+        temperature=body.temperature,
+        tools_enabled=body.tools,
+        client_context=body.client_context,
+        rag_context=rag_ctx,
+        hint=hint,
+    )
+    return reply or "（空回复）", None
+
+
+@router.post("/chat", response_model=ChatResponse, summary="AI 对话（计划层+工具+缓存+会话）")
 async def chat(body: ChatRequest, user: Optional[User] = Depends(get_optional_user),
                session: AsyncSession = Depends(get_session)):
     msgs, _, question = _assemble(body)
@@ -114,25 +145,26 @@ async def chat(body: ChatRequest, user: Optional[User] = Depends(get_optional_us
     rag_ctx = await _rag_context(user, session, body.project_id)
     session_mode = False
     history: list[dict] = []
+    ctx_sig: Optional[str] = None
     if body.session_id:
         user_msgs = [m for m in msgs if m["role"] == "user"]
         if len(user_msgs) == 1:
             session_mode = True
             history = await agent.history_get(uid, body.session_id)
             msgs = [m for m in msgs if m["role"] == "system"] + history + user_msgs
+            ctx_sig = agent._ctx_fingerprint(history, body.project_id or "")
+
+    hit = await agent.cache_lookup(uid, question, ctx_sig if session_mode else None)
+    if hit is not None and hit[1]:
+        # 全命中：直接回放（无会话 或 会话上下文指纹一致）
+        if session_mode:
+            await agent.history_append(uid, body.session_id, question, hit[0])
+        return ChatResponse(reply=hit[0], model="cache", cached=True)
+    hint = hit[0] if hit is not None else None  # 半命中：仅作 LLM 参考提示
+
     try:
-        cached = await agent.cache_get(uid, question)
-        if cached:
-            if session_mode:
-                await agent.history_append(uid, body.session_id, question, cached)
-            return ChatResponse(reply=cached, model="cache", cached=True)
-        reply, model, used_tools = await asyncio.to_thread(
-            agent.run_agent, msgs,
-            temperature=body.temperature,
-            tools_enabled=body.tools,
-            client_context=body.client_context,
-            rag_context=rag_ctx,
-        )
+        reply, steps = await asyncio.to_thread(
+            _exec_reply, msgs, body, question, hint, rag_ctx)
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -141,13 +173,16 @@ async def chat(body: ChatRequest, user: Optional[User] = Depends(get_optional_us
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"LLM 调用失败: {type(exc).__name__}: {exc}",
         )
-    await agent.cache_put(uid, question, reply)
+    if not reply.strip():
+        reply = "（空回复）"
+    await agent.cache_put(uid, question, reply, ctx_sig=ctx_sig if session_mode else None)
     if session_mode:
         await agent.history_append(uid, body.session_id, question, reply)
-    return ChatResponse(reply=reply, model=model, used_tools=used_tools)
+    return ChatResponse(reply=reply, model=settings.llm_model, used_tools=steps is not None,
+                        steps=steps)
 
 
-@router.post("/chat/stream", summary="AI 对话流式（SSE，工具/缓存/会话同 /chat）")
+@router.post("/chat/stream", summary="AI 对话流式（SSE，计划层/工具/缓存/会话同 /chat）")
 async def chat_stream(body: ChatRequest, user: Optional[User] = Depends(get_optional_user),
                       session: AsyncSession = Depends(get_session)):
     msgs, _, question = _assemble(body)
@@ -156,36 +191,39 @@ async def chat_stream(body: ChatRequest, user: Optional[User] = Depends(get_opti
     uid = _uid(user)
     rag_ctx = await _rag_context(user, session, body.project_id)
     session_mode = False
+    history: list[dict] = []
+    ctx_sig: Optional[str] = None
     if body.session_id:
         user_msgs = [m for m in msgs if m["role"] == "user"]
         if len(user_msgs) == 1:
             session_mode = True
             history = await agent.history_get(uid, body.session_id)
             msgs = [m for m in msgs if m["role"] == "system"] + history + user_msgs
-    payload = body
+            ctx_sig = agent._ctx_fingerprint(history, body.project_id or "")
 
     async def sse():
         text = ""
+        steps: Optional[list[dict]] = None
         try:
-            cached = await agent.cache_get(uid, question)
-            if cached:
-                text = cached
+            hit = await agent.cache_lookup(uid, question, ctx_sig if session_mode else None)
+            if hit is not None and hit[1]:
+                text = hit[0]
             else:
-                text, _model, _used_tools = await asyncio.to_thread(
-                    agent.run_agent, msgs,
-                    temperature=payload.temperature,
-                    tools_enabled=payload.tools,
-                    client_context=payload.client_context,
-                    rag_context=rag_ctx,
-                )
+                hint = hit[0] if hit is not None else None
+                text, steps = await asyncio.to_thread(
+                    _exec_reply, msgs, body, question, hint, rag_ctx)
                 if not text:
                     text = "（空回复）"
-                await agent.cache_put(uid, question, text)
+                await agent.cache_put(uid, question, text,
+                                      ctx_sig=ctx_sig if session_mode else None)
+            # 计划层步骤先发事件（前端可展示“执行步骤”）
+            if steps:
+                yield f"data: {json.dumps({'steps': steps}, ensure_ascii=False)}\n\n"
             for part in _stream_chunks(text):
                 yield f"data: {json.dumps({'delta': part}, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.004)
             if session_mode:
-                await agent.history_append(uid, payload.session_id, question, text)
+                await agent.history_append(uid, body.session_id, question, text)
         except RuntimeError as exc:
             yield f"data: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
         except Exception as exc:  # noqa: BLE001

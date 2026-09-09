@@ -78,7 +78,8 @@ def test_assistant_chat_proxy(client, register, monkeypatch):
     captured = {}
 
     def fake_agent(messages, base_url=None, api_key=None, model=None, temperature=0.7,
-                   tools_enabled=True, client_context=None, rag_context=None):
+                   tools_enabled=True, client_context=None, rag_context=None,
+                   hint=None):
         captured.update({"messages": messages, "temperature": temperature,
                          "tools_enabled": tools_enabled, "rag_context": rag_context})
         return "你好！我是测试助手。", "mock-model", False

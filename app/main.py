@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 
 from app.core.config import settings
+from app.core.metrics import MetricsMiddleware, metrics_http
 from app.database import init_db
 from app.routers import (
     auth,
@@ -36,13 +37,17 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001
         logger.exception("数据库初始化失败（请确认 PostgreSQL 已启动并执行过迁移）")
         raise
-    # 启动期确保 Qdrant collection 存在（不依赖 AI 模型时的默认维度）
+    # 启动期确保 Qdrant collection 存在（维度跟随 Embedding 配置，避免误告警）
     try:
-        from app.services import qdrant_service
+        from app.core.config import settings
+        from app.services import embedding, qdrant_service
 
-        qdrant_service.ensure_collections(vector_size=1024)
-    except Exception:  # noqa: BLE001
-        logger.warning("Qdrant 不可用，向量检索功能暂不可用")
+        preset_dim = (embedding.preset_info(settings.embedding_preset) or {}).get("dim")
+        startup_dim = settings.embedding_dim or preset_dim or 1024
+        qdrant_service.ensure_collections(vector_size=int(startup_dim))
+    except Exception as exc:  # noqa: BLE001
+        # 维度不一致等 → 提示重建，不阻塞启动（RAG 功能暂不可用）
+        logger.warning("Qdrant 不可用，向量检索功能暂不可用：%s", exc)
     yield
 
 
@@ -59,6 +64,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# APM：Prometheus HTTP 指标采集（请求计数/耗时/并发，跳过 /metrics 自身）
+app.add_middleware(MetricsMiddleware)
 
 PREFIX = settings.api_prefix
 
@@ -82,6 +89,9 @@ app.include_router(recommendations.router, prefix=PREFIX)
 app.include_router(imports.router, prefix=PREFIX)
 app.include_router(hotspots.router, prefix=PREFIX)
 app.include_router(convert.router, prefix=PREFIX)
+
+# ========== Prometheus 指标端点（须在 SPA 兜底路由之前注册） ==========
+app.add_api_route("/metrics", metrics_http, methods=["GET"], include_in_schema=False)
 
 
 # ========== /docs 保护：仅允许 localhost 访问 ==========
